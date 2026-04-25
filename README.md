@@ -32,6 +32,7 @@
 - `EDA_Checkpoint.ipynb`：期中 EDA 与清洗方案 notebook
 - `doc_images/`：期中阶段关键图表
 - `task.md`：任务书要求映射与当前完成状态
+- `AI_Assistant_Memo.md`：给后续智能体的接手规范与工作流程
 - `requirements.txt`：当前 notebook 运行依赖
 - `大作业考核任务书(Project_Evaluation).pdf`：课程任务书原文
 

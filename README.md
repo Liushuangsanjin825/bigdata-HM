@@ -51,6 +51,8 @@ jupyter notebook EDA_Checkpoint.ipynb
 
 3. 修改 `BASE_PATH` 指向本地数据目录后运行。
 
+4. 仓库内已包含课程任务书 PDF；如需在 notebook 或脚本里读取 PDF 文本，请先安装依赖并使用 `pypdf`。
+
 ## 5. 依赖说明
 
 - numpy
@@ -58,6 +60,7 @@ jupyter notebook EDA_Checkpoint.ipynb
 - plotly
 - matplotlib
 - jupyter
+- pypdf
 
 ## 6. 阶段状态
 

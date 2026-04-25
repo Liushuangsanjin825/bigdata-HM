@@ -1,0 +1,6 @@
+# EDA_Checkpoint.ipynb runtime dependencies
+numpy
+polars
+plotly
+matplotlib
+jupyter

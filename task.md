@@ -4,7 +4,7 @@
 
 - 项目名称：基于多模态大数据的商品购买转化预测与推荐系统实战（H&M）
 - 仓库名称：bigdata-HM
-- 当前阶段：第一阶段（期中考核，20%）
+- 当前阶段：第二阶段进行中（期末工程交付，35%）
 - 对齐依据：大作业考核任务书（Project_Evaluation）
 
 ## 2. 任务书要求映射
@@ -19,7 +19,26 @@
 ### 2.2 当前仓库覆盖范围
 
 - 已覆盖：期中考核（20%）
+- 已启动：期末工程交付（第二阶段）baseline 流水线
 - 未覆盖：期末报告、Kaggle 打榜、答辩材料
+
+### 2.3 Kaggle 官方规则提炼（不含奖励与时间线）
+
+1. 任务定义
+	- 基于历史交易 + 客户/商品元数据进行个性化商品推荐。
+	- 可使用结构化特征，也可扩展文本与图像特征。
+2. 评分规则
+	- 采用 `MAP@12` 作为核心指标。
+	- 每位客户最多提交 12 个推荐商品，按排序位置计算命中质量。
+	- 评分仅统计测试期内有真实购买的客户，但提交时必须覆盖给定客户列表中的全部 `customer_id`。
+	- 对真实购买数小于 12 的客户，提交满 12 条预测无惩罚。
+3. 提交格式
+	- 文件格式为 CSV，包含表头：`customer_id,prediction`。
+	- `prediction` 为以空格分隔的 `article_id` 列表（最多 12 个）。
+	- 预测目标窗口为训练期之后的下一个 7 天。
+4. 工程约束
+	- `customer_id`、`article_id` 全流程按字符串处理，避免前导零丢失。
+	- 输出前需校验列名、分隔符与每行推荐数量上限（12）。
 
 ## 3. 第一阶段完成情况（已完成）
 
@@ -38,15 +57,17 @@
 ## 4. 当前交付物清单
 
 1. `EDA_Checkpoint.ipynb`：期中考核主交付 notebook
-2. `doc_images/`：关键图表（趋势、渠道、品类、用户特征等）
-3. `README.md`：任务书对齐说明与阶段状态
-4. `requirements.txt`：当前 notebook 运行依赖
+2. `Final_Project.py`：第二阶段主实现脚本
+3. `Final_Project.ipynb`：第二阶段同步展示 notebook
+4. `doc_images/`：关键图表（趋势、渠道、品类、用户特征等）
+5. `README.md`：任务书对齐说明与阶段状态
+6. `requirements.txt`：当前 notebook 运行依赖
 
 ## 5. 未完成项（后续阶段）
 
-1. `Final_Project.ipynb`（任务书第二阶段要求）
-2. `Submission.csv` 与 Kaggle 打榜证明截图（任务书第三阶段要求）
-3. K-Fold 稳定性（random_state=610）与 XAI（SHAP/LIME）完整报告
+1. 第二阶段模型能力补全：K-Fold 训练、候选召回增强、排序模型优化
+2. XAI 可解释性补全：SHAP 或 LIME 分析与报告
+3. 竞赛交付补全：Kaggle 提交与 MAP@12 证明材料
 4. 答辩展示材料与个人贡献说明
 
 ## 6. 当前结论
@@ -61,3 +82,52 @@
 - [x] 已完成内容均有文件证据
 - [x] 未完成内容已明确列出
 - [ ] 第二、三阶段交付物仍待后续补充
+
+## 8. 本次任务进度记录（2026-04-26）
+
+1. 目标：将第二阶段从骨架推进到可运行 baseline，保证脚本可直接生成提交格式结果。
+2. 输入：`Final_Project.py`、`Final_Project.ipynb`、主数据集目录 `G:\h-and-m-personalized-fashion-recommendations`。
+3. 动作：
+	- 在 `Final_Project.py` 中实现 baseline 特征构建与推荐生成逻辑。
+	- 修复时间差计算报错（Polars API 由 `dt.days()` 调整为 `dt.total_days()`）。
+	- 端到端执行脚本并验证输出路径与结果预览。
+4. 结果：
+	- 脚本执行成功（exit code 0）。
+	- 已产出 `submission.csv` 到 `G:\h-and-m-personalized-fashion-recommendations\outputs\submission.csv`。
+	- 第二阶段状态更新为“baseline 可运行，后续补 K-Fold/XAI/竞赛证明材料”。
+
+## 9. 文档补充记录（2026-04-26）
+
+1. 目标：补充官方赛题中与工程落地直接相关的规则说明。
+2. 输入：Kaggle 官方 Description / Evaluation / Submission File 文本。
+3. 动作：
+	- 从官方介绍中抽取任务定义、MAP@12 评分规则、提交格式与预测窗口约束。
+	- 显式剔除时间线与奖励金额等非工程实现信息。
+	- 同步更新 `README.md` 与 `task.md`，保证后续实现可直接对照规则执行。
+4. 结果：
+	- 工作区文档已补齐“提交方式与要求”的统一口径。
+	- 后续代码改造可直接围绕“全量客户覆盖 + 每人最多12条 + 7天预测窗口 + MAP@12”展开。
+
+## 10. 第二阶段推进记录（2026-04-26）
+
+1. 目标：将第二阶段由“可运行 baseline”推进到“可评估 + 可提交 + 可校验”的 baseline+。
+2. 输入：`Final_Project.py`、`sample_submission.csv`、`transactions_train.csv`、新补充的官方提交规范。
+3. 动作：
+	- 重构 `Final_Project.py` 为端到端流程：数据读取、时间窗口评估、提交生成、格式校验。
+	- 新增 5 折时间窗口离线评估（每折验证窗口 7 天），输出 MAP@12。
+	- 召回从“用户历史 + 全局热门”扩展到“三路召回”：用户历史 + 渠道热门 + 全局热门，并进行加权重排。
+	- 增加提交文件校验：列名、客户覆盖、每行推荐数量上限（12）与重复项检查。
+	- 输出路径调整为仓库内 `outputs/submission.csv`，避免外部目录写权限问题。
+	- 在 `AI_Assistant_Memo.md` 新增“6.1 task.md 更新频率规则（必须遵守）”，并补充中断交接与用户即时要求两类例外场景。
+	- 在提交前清单加入“无中途重复写入 `task.md`”检查项。
+4. 结果：
+	- 端到端脚本运行成功（`python -B Final_Project.py`，exit code 0）。
+	- 离线 5 折 MAP@12：
+		- Fold1: 0.013006
+		- Fold2: 0.012306
+		- Fold3: 0.013601
+		- Fold4: 0.014458
+		- Fold5: 0.014540
+		- Mean: 0.013582
+	- 已生成提交文件：`G:\Users\caoruijie\bigdata-HM\outputs\submission.csv`。
+	- 已明确“按完整对话收尾统一更新 task”的执行口径，可用于后续协作交接。

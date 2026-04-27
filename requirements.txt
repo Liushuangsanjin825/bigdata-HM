@@ -1,7 +1,7 @@
-# EDA_Checkpoint.ipynb runtime dependencies
-numpy
-polars
-plotly
-matplotlib
-jupyter
-pypdf
+# Runtime dependencies (scripts + notebooks)
+numpy>=1.26.0
+polars>=1.38.0
+plotly>=5.20.0
+matplotlib>=3.8.0
+jupyter>=1.0.0
+pypdf>=5.0.0

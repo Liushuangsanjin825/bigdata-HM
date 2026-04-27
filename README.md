@@ -95,7 +95,10 @@ python Final_Project.py
 python Final_Project_Eval.py
 ```
 
-4. 修改 `BASE_PATH` 指向本地数据目录后运行；`Final_Project.py` 默认输出到仓库内 `outputs/submission.csv`（文件名固定不变）。
+4. 数据目录配置（推荐环境变量）：
+   - 推荐设置环境变量 `HNM_DATA_PATH` 指向你本机的数据目录。
+   - 也可直接在脚本内调整 `BASE_PATH`。
+   - `Final_Project.py` 默认输出到仓库内 `outputs/submission.csv`（文件名固定不变）。
 
 5. 仓库内已包含课程任务书 PDF；如需在 notebook 或脚本里读取 PDF 文本，请先安装依赖并使用 `pypdf`。
 

@@ -40,6 +40,7 @@
 ### 3.2 依赖与环境
 
 - notebook 运行依赖写在 [requirements.txt](requirements.txt)。
+- 协同作者需使用自己的数据目录：优先设置环境变量 `HNM_DATA_PATH`，或在脚本中更新 `BASE_PATH`。
 - 如果新增 PDF 读取、文本提取或其它能力，先补依赖，再更新说明。
 - `.venv` 不进入仓库，属于本地环境，不要提交。
 

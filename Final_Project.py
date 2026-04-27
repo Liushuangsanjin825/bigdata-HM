@@ -11,6 +11,7 @@ Offline evaluation and ranker tuning are moved to `Final_Project_Eval.py`.
 
 from __future__ import annotations
 
+import os
 import platform
 import sys
 from dataclasses import dataclass
@@ -20,9 +21,9 @@ from typing import Any
 
 import polars as pl
 
-BASE_PATH = Path(r"G:\h-and-m-personalized-fashion-recommendations")
 PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
+DATA_PATH_ENV_VAR = "HNM_DATA_PATH"
 
 MAX_K = 12
 USER_RECENT_TOP = 24
@@ -32,6 +33,57 @@ DEPARTMENT_TOP = 24
 AGE_TOP = 24
 TREND_TOP = 80
 GLOBAL_TOP = 120
+REQUIRED_DATA_FILES: tuple[str, ...] = (
+    "articles.csv",
+    "customers.csv",
+    "transactions_train.csv",
+    "sample_submission.csv",
+)
+
+
+def _has_required_data_files(base_path: Path) -> bool:
+    return all((base_path / filename).exists() for filename in REQUIRED_DATA_FILES)
+
+
+def resolve_base_path(explicit_path: Path | None = None) -> Path:
+    candidates: list[Path] = []
+    if explicit_path is not None:
+        candidates.append(Path(explicit_path).expanduser())
+
+    env_path = os.getenv(DATA_PATH_ENV_VAR)
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+
+    candidates.extend(
+        [
+            PROJECT_ROOT / "data" / "h-and-m-personalized-fashion-recommendations",
+            PROJECT_ROOT / "h-and-m-personalized-fashion-recommendations",
+            Path.cwd() / "data" / "h-and-m-personalized-fashion-recommendations",
+            Path.cwd() / "h-and-m-personalized-fashion-recommendations",
+        ]
+    )
+
+    seen: set[str] = set()
+    normalized_candidates: list[Path] = []
+    for candidate in candidates:
+        normalized = candidate.expanduser()
+        key = str(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized_candidates.append(normalized)
+
+    for candidate in normalized_candidates:
+        if _has_required_data_files(candidate):
+            return candidate
+
+    if normalized_candidates:
+        return normalized_candidates[0]
+
+    return PROJECT_ROOT / "data" / "h-and-m-personalized-fashion-recommendations"
+
+
+BASE_PATH = resolve_base_path()
 
 
 @dataclass(frozen=True)
@@ -790,6 +842,7 @@ def generate_submission(
 
 
 def run_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
+    base_path = resolve_base_path(base_path)
     tables = load_tables(base_path)
     summary = summarize_inputs(tables)
     transactions = prepare_transactions(tables["transactions"])
@@ -812,9 +865,12 @@ def run_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
 
 
 def main() -> dict[str, Any]:
+    base_path = resolve_base_path(BASE_PATH)
     print_environment_info()
-    print_data_file_status(BASE_PATH)
-    state = run_pipeline(BASE_PATH)
+    print(f"Using dataset base path: {base_path}")
+    print(f"Override with env var: {DATA_PATH_ENV_VAR}")
+    print_data_file_status(base_path)
+    state = run_pipeline(base_path)
 
     print("\nInput summary:")
     print(state["summary"])

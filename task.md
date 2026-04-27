@@ -57,11 +57,12 @@
 ## 4. 当前交付物清单
 
 1. `EDA_Checkpoint.ipynb`：期中考核主交付 notebook
-2. `Final_Project.py`：第二阶段主实现脚本
-3. `Final_Project.ipynb`：第二阶段同步展示 notebook
-4. `doc_images/`：关键图表（趋势、渠道、品类、用户特征等）
-5. `README.md`：任务书对齐说明与阶段状态
-6. `requirements.txt`：当前 notebook 运行依赖
+2. `Final_Project.py`：第二阶段生成层脚本（仅负责生成 `outputs/submission.csv`）
+3. `Final_Project_Eval.py`：第二阶段评估层脚本（离线评估与调参）
+4. `Final_Project.ipynb`：第二阶段同步展示 notebook（已对齐“生成层/评估层”拆分）
+5. `doc_images/`：关键图表（趋势、渠道、品类、用户特征等）
+6. `README.md`：任务书对齐说明与阶段状态
+7. `requirements.txt`：当前 notebook 运行依赖
 
 ## 5. 未完成项（后续阶段）
 
@@ -131,3 +132,18 @@
 		- Mean: 0.013582
 	- 已生成提交文件：`G:\Users\caoruijie\bigdata-HM\outputs\submission.csv`。
 	- 已明确“按完整对话收尾统一更新 task”的执行口径，可用于后续协作交接。
+
+## 11. 任务收尾记录（2026-04-27）
+
+1. 目标：在不改变提交文件名（`submission.csv`）的前提下，完成第二阶段脚本职责拆分、乱码修复与仓库收尾。
+2. 输入：`Final_Project.py`、`Final_Project.ipynb`、`README.md`、既有 `outputs/ranker_tuning_metrics.csv`。
+3. 动作：
+	- 将 `Final_Project.py` 重构为“仅生成层”脚本：读取数据、加载/回退 ranker、生成并校验 `outputs/submission.csv`。
+	- 新增 `Final_Project_Eval.py` 作为独立“评估层”脚本：离线 MAP@12 评估与权重调参，写出评估结果文件。
+	- 覆盖更新 `Final_Project.ipynb`，同步到“双层架构”并修复中文乱码，统一 UTF-8 保存。
+	- 在 `Final_Project.py`、`Final_Project_Eval.py` 增加 UTF-8 编码声明，降低 Windows 环境下中文乱码风险。
+	- 更新 `README.md` 与 `task.md`，明确第二阶段执行入口与职责边界。
+4. 结果：
+	- 生成层与评估层已解耦，运行与排障路径更清晰。
+	- `submission.csv` 输出文件名与路径保持不变：`outputs/submission.csv`。
+	- Notebook 与脚本中文显示恢复正常，且语法校验通过。

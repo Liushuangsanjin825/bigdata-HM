@@ -1,9 +1,12 @@
-"""Stage-2 baseline+ pipeline for the H&M recommendation task.
+# -*- coding: utf-8 -*-
+"""Submission-only pipeline for the H&M recommendation task.
 
-This script provides:
-1. Time-window offline evaluation with MAP@12.
-2. Multi-source candidate recall (user history + channel hot + global hot).
-3. Competition-format submission generation and validation.
+This script is responsible only for:
+1. Loading data.
+2. Building recommendation artifacts.
+3. Generating and validating `outputs/submission.csv`.
+
+Offline evaluation and ranker tuning are moved to `Final_Project_Eval.py`.
 """
 
 from __future__ import annotations
@@ -15,27 +18,16 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
-import numpy as np
 import polars as pl
-import plotly.express as px
 
 BASE_PATH = Path(r"G:\h-and-m-personalized-fashion-recommendations")
 PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_FILES = {
-    "articles": BASE_PATH / "articles.csv",
-    "customers": BASE_PATH / "customers.csv",
-    "transactions": BASE_PATH / "transactions_train.csv",
-    "submission": BASE_PATH / "sample_submission.csv",
-}
-RANDOM_STATE = 610
-N_SPLITS = 5
-MAX_K = 12
-EVAL_WINDOW_DAYS = 7
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
+MAX_K = 12
 USER_HISTORY_TOP = 24
 CHANNEL_TOP = 24
+DEPARTMENT_TOP = 24
 GLOBAL_TOP = 120
 
 
@@ -44,19 +36,15 @@ class EnvironmentInfo:
     python: str
     platform: str
     polars: str
-    numpy: str
-    matplotlib: str
-    plotly: str
 
 
 @dataclass(frozen=True)
-class FoldResult:
-    fold_id: int
-    train_end: date
-    valid_start: date
-    valid_end: date
-    customer_count: int
-    map12: float
+class RankerConfig:
+    name: str
+    user_weight: float
+    channel_weight: float
+    department_weight: float
+    global_weight: float
 
 
 @dataclass(frozen=True)
@@ -64,9 +52,29 @@ class RecommenderArtifacts:
     reference_date: date
     user_history: dict[str, list[str]]
     customer_pref_channel: dict[str, int]
+    customer_pref_department: dict[str, int]
     channel_top_items: dict[int, list[str]]
+    department_top_items: dict[int, list[str]]
     global_top_items: list[str]
     global_rank: dict[str, int]
+
+
+@dataclass(frozen=True)
+class PredictionContext:
+    base_global_scores: dict[str, float]
+    cold_start_prediction: list[str]
+
+
+RANKER_CANDIDATES: tuple[RankerConfig, ...] = (
+    RankerConfig("baseline_plus", user_weight=30.0, channel_weight=8.0, department_weight=6.0, global_weight=2.0),
+    RankerConfig("history_heavy", user_weight=36.0, channel_weight=8.0, department_weight=6.0, global_weight=2.0),
+    RankerConfig("channel_heavy", user_weight=30.0, channel_weight=12.0, department_weight=6.0, global_weight=2.0),
+    RankerConfig("department_heavy", user_weight=30.0, channel_weight=8.0, department_weight=10.0, global_weight=2.0),
+    RankerConfig("global_smooth", user_weight=26.0, channel_weight=8.0, department_weight=6.0, global_weight=3.5),
+    RankerConfig("balanced_fresh", user_weight=28.0, channel_weight=10.0, department_weight=8.0, global_weight=2.5),
+)
+DEFAULT_RANKER = RANKER_CANDIDATES[0]
+RANKER_BY_NAME = {cfg.name: cfg for cfg in RANKER_CANDIDATES}
 
 
 def get_environment_info() -> EnvironmentInfo:
@@ -74,9 +82,14 @@ def get_environment_info() -> EnvironmentInfo:
         python=sys.version.split()[0],
         platform=platform.platform(),
         polars=pl.__version__,
-        numpy=np.__version__,
-        matplotlib=plt.matplotlib.__version__,
-        plotly=getattr(px, "__version__", "unknown"),
+    )
+
+
+def describe_ranker(config: RankerConfig) -> str:
+    return (
+        f"{config.name} "
+        f"(user={config.user_weight}, channel={config.channel_weight}, "
+        f"department={config.department_weight}, global={config.global_weight})"
     )
 
 
@@ -85,9 +98,6 @@ def print_environment_info() -> None:
     print(f"Python: {info.python}")
     print(f"Platform: {info.platform}")
     print(f"polars: {info.polars}")
-    print(f"numpy: {info.numpy}")
-    print(f"matplotlib: {info.matplotlib}")
-    print(f"plotly: {info.plotly}")
 
 
 def print_data_file_status(base_path: Path = BASE_PATH) -> dict[str, Path]:
@@ -157,25 +167,16 @@ def prepare_transactions(transactions_lf: pl.LazyFrame) -> pl.DataFrame:
     )
 
 
-def apk(actual: list[str], predicted: list[str], k: int = MAX_K) -> float:
-    if not actual:
-        return 0.0
-    score = 0.0
-    hits = 0.0
-    used: set[str] = set()
-    for idx, item in enumerate(predicted[:k], start=1):
-        if item in actual and item not in used:
-            hits += 1.0
-            score += hits / idx
-            used.add(item)
-    return score / min(len(actual), k)
-
-
-def mapk12(actual_list: list[list[str]], predicted_list: list[list[str]], k: int = MAX_K) -> float:
-    if not actual_list:
-        return 0.0
-    scores = [apk(actual, predicted, k=k) for actual, predicted in zip(actual_list, predicted_list)]
-    return float(np.mean(scores))
+def prepare_article_department(articles_lf: pl.LazyFrame) -> pl.DataFrame:
+    return (
+        articles_lf.select(
+            pl.col("article_id").cast(pl.Utf8),
+            pl.col("department_no").cast(pl.Int64, strict=False),
+        )
+        .drop_nulls(["article_id", "department_no"])
+        .unique(subset=["article_id"], keep="first")
+        .collect(engine="streaming")
+    )
 
 
 def _build_user_history(train_tx: pl.DataFrame) -> dict[str, list[str]]:
@@ -212,6 +213,24 @@ def _build_customer_pref_channel(train_tx: pl.DataFrame) -> dict[str, int]:
     return result
 
 
+def _build_customer_pref_department(tx_with_dept: pl.DataFrame) -> dict[str, int]:
+    pref = (
+        tx_with_dept.drop_nulls(["department_no"])
+        .group_by(["customer_id", "department_no"])
+        .agg(
+            pl.len().alias("txn_cnt"),
+            pl.max("t_dat").alias("last_date"),
+        )
+        .sort(["customer_id", "txn_cnt", "last_date"], descending=[False, True, True])
+        .group_by("customer_id")
+        .agg(pl.col("department_no").first().alias("pref_department"))
+    )
+    result: dict[str, int] = {}
+    for row in pref.iter_rows(named=True):
+        result[row["customer_id"]] = int(row["pref_department"])
+    return result
+
+
 def _build_channel_top(train_tx: pl.DataFrame, ref_date: date) -> dict[int, list[str]]:
     cutoff = ref_date - timedelta(days=30)
     channel_top = (
@@ -225,6 +244,23 @@ def _build_channel_top(train_tx: pl.DataFrame, ref_date: date) -> dict[int, list
     result: dict[int, list[str]] = {}
     for row in channel_top.iter_rows(named=True):
         result[int(row["sales_channel_id"])] = row["channel_items"] or []
+    return result
+
+
+def _build_department_top(tx_with_dept: pl.DataFrame, ref_date: date) -> dict[int, list[str]]:
+    cutoff = ref_date - timedelta(days=30)
+    department_top = (
+        tx_with_dept.filter(pl.col("t_dat") >= pl.lit(cutoff))
+        .drop_nulls(["department_no"])
+        .group_by(["department_no", "article_id"])
+        .agg(pl.len().alias("pop_30d"))
+        .sort(["department_no", "pop_30d", "article_id"], descending=[False, True, False])
+        .group_by("department_no")
+        .agg(pl.col("article_id").head(DEPARTMENT_TOP).alias("department_items"))
+    )
+    result: dict[int, list[str]] = {}
+    for row in department_top.iter_rows(named=True):
+        result[int(row["department_no"])] = row["department_items"] or []
     return result
 
 
@@ -262,89 +298,101 @@ def _build_global_top(train_tx: pl.DataFrame, ref_date: date) -> list[str]:
     return merged[:GLOBAL_TOP]
 
 
-def fit_recommender(train_tx: pl.DataFrame) -> RecommenderArtifacts:
+def fit_recommender(train_tx: pl.DataFrame, article_department: pl.DataFrame) -> RecommenderArtifacts:
     reference_date = train_tx.get_column("t_dat").max()
+    tx_with_dept = train_tx.join(article_department, on="article_id", how="left")
     user_history = _build_user_history(train_tx)
     customer_pref_channel = _build_customer_pref_channel(train_tx)
+    customer_pref_department = _build_customer_pref_department(tx_with_dept)
     channel_top_items = _build_channel_top(train_tx, reference_date)
+    department_top_items = _build_department_top(tx_with_dept, reference_date)
     global_top_items = _build_global_top(train_tx, reference_date)
     global_rank = {item: idx for idx, item in enumerate(global_top_items)}
     return RecommenderArtifacts(
         reference_date=reference_date,
         user_history=user_history,
         customer_pref_channel=customer_pref_channel,
+        customer_pref_department=customer_pref_department,
         channel_top_items=channel_top_items,
+        department_top_items=department_top_items,
         global_top_items=global_top_items,
         global_rank=global_rank,
     )
 
 
-def _rank_candidates(
-    user_items: list[str],
-    channel_items: list[str],
-    global_items: list[str],
-    global_rank: dict[str, int],
-    k: int = MAX_K,
-) -> list[str]:
-    scores: dict[str, float] = {}
-    for idx, item in enumerate(user_items):
-        scores[item] = scores.get(item, 0.0) + 30.0 / (idx + 1)
-    for idx, item in enumerate(channel_items):
-        scores[item] = scores.get(item, 0.0) + 8.0 / (idx + 1)
-    for idx, item in enumerate(global_items):
-        scores[item] = scores.get(item, 0.0) + 2.0 / (idx + 1)
-
-    ranked = sorted(
-        scores.keys(),
-        key=lambda item: (
-            -scores[item],
-            global_rank.get(item, 10**9),
-            item,
-        ),
+def _build_prediction_context(artifacts: RecommenderArtifacts, ranker_config: RankerConfig) -> PredictionContext:
+    base_global_scores: dict[str, float] = {}
+    if ranker_config.global_weight > 0:
+        for idx, item in enumerate(artifacts.global_top_items):
+            base_global_scores[item] = ranker_config.global_weight / (idx + 1)
+    return PredictionContext(
+        base_global_scores=base_global_scores,
+        cold_start_prediction=artifacts.global_top_items[:MAX_K],
     )
-    return ranked[:k]
 
 
-def predict_list_for_customer(
-    customer_id: str,
-    artifacts: RecommenderArtifacts,
-    k: int = MAX_K,
-) -> list[str]:
-    user_items = artifacts.user_history.get(customer_id, [])
-    pref_channel = artifacts.customer_pref_channel.get(customer_id)
-    channel_items = artifacts.channel_top_items.get(pref_channel, []) if pref_channel is not None else []
-    global_items = artifacts.global_top_items
-    ranked_items = _rank_candidates(user_items, channel_items, global_items, artifacts.global_rank, k=k)
-
-    # Safety fallback: ensure we always return up to k items.
-    if len(ranked_items) < k:
-        seen = set(ranked_items)
-        for item in global_items:
-            if item not in seen:
-                ranked_items.append(item)
-                seen.add(item)
-            if len(ranked_items) >= k:
-                break
-    return ranked_items[:k]
-
-
-def predict_for_customers(
+def predict_lists_for_customers(
     customer_ids: list[str],
     artifacts: RecommenderArtifacts,
+    ranker_config: RankerConfig,
     k: int = MAX_K,
-) -> dict[str, list[str]]:
-    results: dict[str, list[str]] = {}
-    for customer_id in customer_ids:
-        results[customer_id] = predict_list_for_customer(customer_id, artifacts, k=k)
+    show_progress: bool = False,
+    progress_label: str = "predict",
+) -> list[list[str]]:
+    context = _build_prediction_context(artifacts, ranker_config)
+    global_items = artifacts.global_top_items
+    global_rank = artifacts.global_rank
+    user_history = artifacts.user_history
+    pref_channel_map = artifacts.customer_pref_channel
+    pref_department_map = artifacts.customer_pref_department
+    channel_top_items = artifacts.channel_top_items
+    department_top_items = artifacts.department_top_items
+    log_every = 200000
+
+    results: list[list[str]] = []
+    total = len(customer_ids)
+    for idx, customer_id in enumerate(customer_ids, start=1):
+        user_items = user_history.get(customer_id, [])
+        pref_channel = pref_channel_map.get(customer_id)
+        pref_department = pref_department_map.get(customer_id)
+        channel_items = channel_top_items.get(pref_channel, []) if pref_channel is not None else []
+        department_items = department_top_items.get(pref_department, []) if pref_department is not None else []
+
+        if not user_items and pref_channel is None and pref_department is None:
+            ranked_items = context.cold_start_prediction[:k]
+        else:
+            scores = context.base_global_scores.copy()
+            for pos, item in enumerate(user_items):
+                scores[item] = scores.get(item, 0.0) + ranker_config.user_weight / (pos + 1)
+            for pos, item in enumerate(channel_items):
+                scores[item] = scores.get(item, 0.0) + ranker_config.channel_weight / (pos + 1)
+            for pos, item in enumerate(department_items):
+                scores[item] = scores.get(item, 0.0) + ranker_config.department_weight / (pos + 1)
+
+            ranked_pairs = sorted(
+                scores.items(),
+                key=lambda kv: (-kv[1], global_rank.get(kv[0], 10**9), kv[0]),
+            )
+            ranked_items = [item for item, _ in ranked_pairs[:k]]
+            if len(ranked_items) < k:
+                seen = set(ranked_items)
+                for item in global_items:
+                    if item not in seen:
+                        ranked_items.append(item)
+                        seen.add(item)
+                    if len(ranked_items) >= k:
+                        break
+            ranked_items = ranked_items[:k]
+        results.append(ranked_items)
+
+        if show_progress and total >= log_every and (idx % log_every == 0 or idx == total):
+            print(f"[{progress_label}] {idx}/{total} customers done")
     return results
 
 
-def build_submission_frame(customer_ids: list[str], prediction_map: dict[str, list[str]]) -> pl.DataFrame:
-    rows = []
-    for customer_id in customer_ids:
-        pred_items = prediction_map.get(customer_id, [])
-        rows.append({"customer_id": customer_id, "prediction": " ".join(pred_items)})
-    return pl.DataFrame(rows)
+def build_submission_frame_from_lists(customer_ids: list[str], prediction_lists: list[list[str]]) -> pl.DataFrame:
+    prediction_text = [" ".join(pred_items) for pred_items in prediction_lists]
+    return pl.DataFrame({"customer_id": customer_ids, "prediction": prediction_text})
 
 
 def validate_submission_format(
@@ -368,9 +416,7 @@ def validate_submission_format(
         raise ValueError(f"customer_id 覆盖错误：missing={len(missing)} extra={len(extra)}")
 
     token_stats = (
-        submission.with_columns(
-            pl.col("prediction").str.split(" ").alias("pred_tokens"),
-        )
+        submission.with_columns(pl.col("prediction").str.split(" ").alias("pred_tokens"))
         .with_columns(
             pl.col("pred_tokens")
             .list.eval(pl.element().filter(pl.element().str.len_chars() > 0))
@@ -391,123 +437,61 @@ def validate_submission_format(
         )
 
 
-def _build_eval_folds(
-    transactions: pl.DataFrame,
-    n_splits: int = N_SPLITS,
-    window_days: int = EVAL_WINDOW_DAYS,
-) -> list[tuple[date, date, date]]:
-    if transactions.is_empty():
-        return []
-    min_date = transactions.get_column("t_dat").min()
-    max_date = transactions.get_column("t_dat").max()
-    folds: list[tuple[date, date, date]] = []
-    for fold_idx in range(n_splits):
-        offset = (n_splits - 1 - fold_idx) * window_days
-        valid_end = max_date - timedelta(days=offset)
-        valid_start = valid_end - timedelta(days=window_days - 1)
-        train_end = valid_start - timedelta(days=1)
-        if train_end <= min_date:
-            continue
-        folds.append((train_end, valid_start, valid_end))
-    return folds
-
-
-def evaluate_fold(
-    transactions: pl.DataFrame,
-    fold_id: int,
-    train_end: date,
-    valid_start: date,
-    valid_end: date,
-) -> FoldResult:
-    train_tx = transactions.filter(pl.col("t_dat") <= pl.lit(train_end))
-    valid_tx = transactions.filter(
-        (pl.col("t_dat") >= pl.lit(valid_start)) & (pl.col("t_dat") <= pl.lit(valid_end))
-    )
-    if train_tx.is_empty() or valid_tx.is_empty():
-        return FoldResult(
-            fold_id=fold_id,
-            train_end=train_end,
-            valid_start=valid_start,
-            valid_end=valid_end,
-            customer_count=0,
-            map12=0.0,
-        )
-
-    artifacts = fit_recommender(train_tx)
-    actual_df = (
-        valid_tx.sort(["customer_id", "t_dat"])
-        .group_by("customer_id")
-        .agg(pl.col("article_id").unique(maintain_order=True).alias("actual_items"))
-    )
-    customers = actual_df.get_column("customer_id").to_list()
-    prediction_map = predict_for_customers(customers, artifacts, k=MAX_K)
-
-    actual_list: list[list[str]] = []
-    predicted_list: list[list[str]] = []
-    for row in actual_df.iter_rows(named=True):
-        customer_id = row["customer_id"]
-        actual_items = row["actual_items"] or []
-        actual_list.append(actual_items)
-        predicted_list.append(prediction_map.get(customer_id, []))
-
-    score = mapk12(actual_list, predicted_list, k=MAX_K)
-    return FoldResult(
-        fold_id=fold_id,
-        train_end=train_end,
-        valid_start=valid_start,
-        valid_end=valid_end,
-        customer_count=len(customers),
-        map12=score,
-    )
-
-
-def run_time_window_evaluation(
-    transactions: pl.DataFrame,
-    n_splits: int = N_SPLITS,
-    window_days: int = EVAL_WINDOW_DAYS,
-) -> pl.DataFrame:
-    folds = _build_eval_folds(transactions, n_splits=n_splits, window_days=window_days)
-    if not folds:
-        return pl.DataFrame(
-            {
-                "fold_id": [],
-                "train_end": [],
-                "valid_start": [],
-                "valid_end": [],
-                "customer_count": [],
-                "map12": [],
-            }
-        )
-
-    results: list[FoldResult] = []
-    for fold_idx, (train_end, valid_start, valid_end) in enumerate(folds, start=1):
-        result = evaluate_fold(transactions, fold_idx, train_end, valid_start, valid_end)
-        results.append(result)
-        print(
-            f"[Fold {fold_idx}] train_end={train_end} valid={valid_start}~{valid_end} "
-            f"customers={result.customer_count} MAP@12={result.map12:.6f}"
-        )
-
-    return pl.DataFrame(
-        {
-            "fold_id": [r.fold_id for r in results],
-            "train_end": [r.train_end for r in results],
-            "valid_start": [r.valid_start for r in results],
-            "valid_end": [r.valid_end for r in results],
-            "customer_count": [r.customer_count for r in results],
-            "map12": [r.map12 for r in results],
-        }
-    )
-
-
 def prepare_output_dir(output_dir: Path = OUTPUT_DIR) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
 
+def load_ranker_from_cache(
+    output_dir: Path = OUTPUT_DIR,
+    fallback: RankerConfig = DEFAULT_RANKER,
+) -> RankerConfig:
+    cache_path = output_dir / "ranker_tuning_metrics.csv"
+    if not cache_path.exists():
+        print(f"ranker cache not found, use fallback: {describe_ranker(fallback)}")
+        return fallback
+    try:
+        metrics = pl.read_csv(cache_path)
+    except Exception as exc:  # pragma: no cover
+        print(f"failed to read ranker cache ({exc}), use fallback: {describe_ranker(fallback)}")
+        return fallback
+    if metrics.is_empty():
+        print(f"ranker cache is empty, use fallback: {describe_ranker(fallback)}")
+        return fallback
+
+    sort_cols = [col for col in ["mean_map12", "std_map12"] if col in metrics.columns]
+    if sort_cols:
+        descending = [True if col == "mean_map12" else False for col in sort_cols]
+        metrics = metrics.sort(sort_cols, descending=descending)
+    row = metrics.row(0, named=True)
+
+    required_weight_cols = {"user_weight", "channel_weight", "department_weight", "global_weight"}
+    if required_weight_cols.issubset(metrics.columns):
+        cfg = RankerConfig(
+            name=str(row.get("config", "cached_ranker")),
+            user_weight=float(row["user_weight"]),
+            channel_weight=float(row["channel_weight"]),
+            department_weight=float(row["department_weight"]),
+            global_weight=float(row["global_weight"]),
+        )
+        print(f"use cached ranker weights: {describe_ranker(cfg)}")
+        return cfg
+
+    cache_name = str(row.get("config", ""))
+    if cache_name in RANKER_BY_NAME:
+        cfg = RANKER_BY_NAME[cache_name]
+        print(f"use cached ranker by name: {describe_ranker(cfg)}")
+        return cfg
+
+    print(f"ranker cache format mismatch, use fallback: {describe_ranker(fallback)}")
+    return fallback
+
+
 def generate_submission(
     tables: dict[str, pl.LazyFrame],
     transactions: pl.DataFrame,
+    article_department: pl.DataFrame,
+    ranker_config: RankerConfig,
     output_dir: Path = OUTPUT_DIR,
 ) -> pl.DataFrame:
     customer_ids = (
@@ -517,9 +501,16 @@ def generate_submission(
         .get_column("customer_id")
         .to_list()
     )
-    artifacts = fit_recommender(transactions)
-    prediction_map = predict_for_customers(customer_ids, artifacts, k=MAX_K)
-    submission = build_submission_frame(customer_ids, prediction_map)
+    artifacts = fit_recommender(transactions, article_department=article_department)
+    prediction_lists = predict_lists_for_customers(
+        customer_ids=customer_ids,
+        artifacts=artifacts,
+        ranker_config=ranker_config,
+        k=MAX_K,
+        show_progress=True,
+        progress_label="submission",
+    )
+    submission = build_submission_frame_from_lists(customer_ids, prediction_lists)
     validate_submission_format(submission, customer_ids, k=MAX_K)
 
     prepare_output_dir(output_dir)
@@ -533,13 +524,18 @@ def run_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
     tables = load_tables(base_path)
     summary = summarize_inputs(tables)
     transactions = prepare_transactions(tables["transactions"])
-    fold_metrics = run_time_window_evaluation(transactions, n_splits=N_SPLITS, window_days=EVAL_WINDOW_DAYS)
-    submission = generate_submission(tables, transactions, output_dir=OUTPUT_DIR)
+    article_department = prepare_article_department(tables["articles"])
+    ranker_config = load_ranker_from_cache(output_dir=prepare_output_dir(OUTPUT_DIR))
+    submission = generate_submission(
+        tables=tables,
+        transactions=transactions,
+        article_department=article_department,
+        ranker_config=ranker_config,
+        output_dir=OUTPUT_DIR,
+    )
     return {
-        "tables": tables,
         "summary": summary,
-        "transactions": transactions,
-        "fold_metrics": fold_metrics,
+        "ranker_config": ranker_config,
         "submission": submission,
     }
 
@@ -548,13 +544,11 @@ def main() -> dict[str, Any]:
     print_environment_info()
     print_data_file_status(BASE_PATH)
     state = run_pipeline(BASE_PATH)
+
     print("\nInput summary:")
     print(state["summary"])
-    print("\nOffline MAP@12 summary:")
-    fold_metrics = state["fold_metrics"]
-    print(fold_metrics)
-    if fold_metrics.height > 0:
-        print(f"mean MAP@12: {fold_metrics.get_column('map12').mean():.6f}")
+    print("\nSelected ranker:")
+    print(describe_ranker(state["ranker_config"]))
     print("\nSubmission preview:")
     print(state["submission"].head(5))
     return state

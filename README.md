@@ -4,7 +4,10 @@
 
 本仓库当前阶段定位：
 - 已完成并提交任务书中的第一阶段（期中考核，20%）
-- 第二阶段已推进到 baseline+（含时间窗口离线评估、召回增强与提交校验），第三阶段（答辩与贡献，15%）尚未在本仓库完成
+- 第二阶段已推进到 baseline+，并完成“生成层/评估层”职责拆分：
+  - `Final_Project.py` 仅负责生成提交文件 `outputs/submission.csv`
+  - `Final_Project_Eval.py` 独立负责离线评估与调参
+- 第三阶段（答辩与贡献，15%）尚未在本仓库完成
 
 ## 1. 任务书评分结构对齐
 
@@ -15,7 +18,7 @@
 4. 答辩与贡献度（15%）：GitHub 提交记录与答辩表现
 
 当前仓库仅完整覆盖第 1 项（期中考核）。
-当前第 2 项已完成 baseline+ 工程实现（可运行脚本、离线 MAP@12 评估、提交文件生成与格式校验）。
+当前第 2 项已完成 baseline+ 工程实现（可运行脚本、离线 MAP@12 评估、提交文件生成与格式校验），并完成生成层与评估层解耦。
 
 ## 2. H&M 赛题关键规则（官方信息提炼）
 
@@ -55,8 +58,9 @@
 ## 4. 仓库结构
 
 - `EDA_Checkpoint.ipynb`：期中 EDA 与清洗方案 notebook
-- `Final_Project.py`：第二阶段主实现脚本，作为后续修改的源文件
-- `Final_Project.ipynb`：第二阶段展示型 notebook，同步引用脚本中的实现
+- `Final_Project.py`：第二阶段生成层脚本，仅负责输出 `outputs/submission.csv`
+- `Final_Project_Eval.py`：第二阶段评估层脚本，负责离线评估与权重调参
+- `Final_Project.ipynb`：第二阶段展示型 notebook（已对齐“生成层/评估层”拆分）
 - `doc_images/`：期中阶段关键图表
 - `task.md`：任务书要求映射与当前完成状态
 - `AI_Assistant_Memo.md`：给后续智能体的接手规范与工作流程
@@ -77,15 +81,21 @@ pip install -r requirements.txt
 jupyter notebook EDA_Checkpoint.ipynb
 ```
 
-第二阶段建议直接运行脚本：
+第二阶段生成层（提交文件生成）：
 
 ```bash
 python Final_Project.py
 ```
 
-3. 修改 `BASE_PATH` 指向本地数据目录后运行；脚本默认输出到仓库内 `outputs/submission.csv`。
+3. 第二阶段评估层（离线评估与调参，耗时较长）：
 
-4. 仓库内已包含课程任务书 PDF；如需在 notebook 或脚本里读取 PDF 文本，请先安装依赖并使用 `pypdf`。
+```bash
+python Final_Project_Eval.py
+```
+
+4. 修改 `BASE_PATH` 指向本地数据目录后运行；`Final_Project.py` 默认输出到仓库内 `outputs/submission.csv`（文件名固定不变）。
+
+5. 仓库内已包含课程任务书 PDF；如需在 notebook 或脚本里读取 PDF 文本，请先安装依赖并使用 `pypdf`。
 
 ## 6. 依赖说明
 

@@ -25,9 +25,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = PROJECT_ROOT / "outputs"
 
 MAX_K = 12
-USER_HISTORY_TOP = 24
+USER_RECENT_TOP = 24
+USER_LONG_TOP = 12
 CHANNEL_TOP = 24
 DEPARTMENT_TOP = 24
+AGE_TOP = 24
+TREND_TOP = 80
 GLOBAL_TOP = 120
 
 
@@ -42,19 +45,27 @@ class EnvironmentInfo:
 class RankerConfig:
     name: str
     user_weight: float
+    long_history_weight: float
     channel_weight: float
     department_weight: float
+    age_weight: float
+    trend_weight: float
     global_weight: float
 
 
 @dataclass(frozen=True)
 class RecommenderArtifacts:
     reference_date: date
-    user_history: dict[str, list[str]]
+    user_recent_history: dict[str, list[str]]
+    user_long_history: dict[str, list[str]]
+    customer_age_bin: dict[str, str]
     customer_pref_channel: dict[str, int]
     customer_pref_department: dict[str, int]
+    age_top_items: dict[str, list[str]]
     channel_top_items: dict[int, list[str]]
     department_top_items: dict[int, list[str]]
+    trend_top_items: list[str]
+    trend_rank: dict[str, int]
     global_top_items: list[str]
     global_rank: dict[str, int]
 
@@ -62,16 +73,91 @@ class RecommenderArtifacts:
 @dataclass(frozen=True)
 class PredictionContext:
     base_global_scores: dict[str, float]
+    base_trend_scores: dict[str, float]
     cold_start_prediction: list[str]
 
 
 RANKER_CANDIDATES: tuple[RankerConfig, ...] = (
-    RankerConfig("baseline_plus", user_weight=30.0, channel_weight=8.0, department_weight=6.0, global_weight=2.0),
-    RankerConfig("history_heavy", user_weight=36.0, channel_weight=8.0, department_weight=6.0, global_weight=2.0),
-    RankerConfig("channel_heavy", user_weight=30.0, channel_weight=12.0, department_weight=6.0, global_weight=2.0),
-    RankerConfig("department_heavy", user_weight=30.0, channel_weight=8.0, department_weight=10.0, global_weight=2.0),
-    RankerConfig("global_smooth", user_weight=26.0, channel_weight=8.0, department_weight=6.0, global_weight=3.5),
-    RankerConfig("balanced_fresh", user_weight=28.0, channel_weight=10.0, department_weight=8.0, global_weight=2.5),
+    RankerConfig(
+        "hybrid_base",
+        user_weight=30.0,
+        long_history_weight=10.0,
+        channel_weight=6.0,
+        department_weight=6.0,
+        age_weight=5.0,
+        trend_weight=4.0,
+        global_weight=1.5,
+    ),
+    RankerConfig(
+        "recent_heavy",
+        user_weight=36.0,
+        long_history_weight=8.0,
+        channel_weight=6.0,
+        department_weight=6.0,
+        age_weight=4.0,
+        trend_weight=4.0,
+        global_weight=1.2,
+    ),
+    RankerConfig(
+        "history_plus",
+        user_weight=34.0,
+        long_history_weight=12.0,
+        channel_weight=6.0,
+        department_weight=6.0,
+        age_weight=4.0,
+        trend_weight=3.0,
+        global_weight=1.2,
+    ),
+    RankerConfig(
+        "age_channel_mix",
+        user_weight=30.0,
+        long_history_weight=8.0,
+        channel_weight=8.0,
+        department_weight=6.0,
+        age_weight=7.0,
+        trend_weight=3.0,
+        global_weight=1.2,
+    ),
+    RankerConfig(
+        "department_mix",
+        user_weight=30.0,
+        long_history_weight=8.0,
+        channel_weight=6.0,
+        department_weight=8.0,
+        age_weight=5.0,
+        trend_weight=3.5,
+        global_weight=1.2,
+    ),
+    RankerConfig(
+        "trend_heavy",
+        user_weight=28.0,
+        long_history_weight=6.0,
+        channel_weight=5.0,
+        department_weight=5.0,
+        age_weight=4.0,
+        trend_weight=6.0,
+        global_weight=1.8,
+    ),
+    RankerConfig(
+        "global_smooth",
+        user_weight=24.0,
+        long_history_weight=6.0,
+        channel_weight=5.0,
+        department_weight=5.0,
+        age_weight=4.0,
+        trend_weight=4.0,
+        global_weight=2.5,
+    ),
+    RankerConfig(
+        "balanced_fresh",
+        user_weight=32.0,
+        long_history_weight=9.0,
+        channel_weight=7.0,
+        department_weight=7.0,
+        age_weight=6.0,
+        trend_weight=4.5,
+        global_weight=1.4,
+    ),
 )
 DEFAULT_RANKER = RANKER_CANDIDATES[0]
 RANKER_BY_NAME = {cfg.name: cfg for cfg in RANKER_CANDIDATES}
@@ -88,8 +174,9 @@ def get_environment_info() -> EnvironmentInfo:
 def describe_ranker(config: RankerConfig) -> str:
     return (
         f"{config.name} "
-        f"(user={config.user_weight}, channel={config.channel_weight}, "
-        f"department={config.department_weight}, global={config.global_weight})"
+        f"(user={config.user_weight}, long={config.long_history_weight}, "
+        f"channel={config.channel_weight}, department={config.department_weight}, "
+        f"age={config.age_weight}, trend={config.trend_weight}, global={config.global_weight})"
     )
 
 
@@ -179,7 +266,65 @@ def prepare_article_department(articles_lf: pl.LazyFrame) -> pl.DataFrame:
     )
 
 
-def _build_user_history(train_tx: pl.DataFrame) -> dict[str, list[str]]:
+def _age_bin_expr(age_expr: pl.Expr) -> pl.Expr:
+    return (
+        pl.when(age_expr < 18).then(pl.lit("u18"))
+        .when(age_expr < 25).then(pl.lit("18_24"))
+        .when(age_expr < 35).then(pl.lit("25_34"))
+        .when(age_expr < 45).then(pl.lit("35_44"))
+        .when(age_expr < 55).then(pl.lit("45_54"))
+        .when(age_expr < 65).then(pl.lit("55_64"))
+        .otherwise(pl.lit("65_plus"))
+    )
+
+
+def prepare_customer_age_bin(customers_lf: pl.LazyFrame) -> dict[str, str]:
+    age_median = (
+        customers_lf.select(pl.col("age").cast(pl.Float64, strict=False).drop_nulls().median().alias("age_median"))
+        .collect(engine="streaming")
+        .get_column("age_median")[0]
+    )
+    customer_age = (
+        customers_lf.select(
+            pl.col("customer_id").cast(pl.Utf8),
+            pl.col("age").cast(pl.Float64, strict=False).fill_null(age_median).alias("age_filled"),
+        )
+        .with_columns(_age_bin_expr(pl.col("age_filled")).alias("age_bin"))
+        .select("customer_id", "age_bin")
+        .collect(engine="streaming")
+    )
+    result: dict[str, str] = {}
+    for row in customer_age.iter_rows(named=True):
+        result[row["customer_id"]] = row["age_bin"]
+    return result
+
+
+def _build_user_recent_history(train_tx: pl.DataFrame, ref_date: date) -> dict[str, list[str]]:
+    cutoff = ref_date - timedelta(days=180)
+    history = (
+        train_tx.filter(pl.col("t_dat") >= pl.lit(cutoff))
+        .group_by(["customer_id", "article_id"])
+        .agg(
+            pl.len().alias("ua_cnt"),
+            pl.max("t_dat").alias("ua_last_date"),
+        )
+        .with_columns(
+            (pl.lit(ref_date) - pl.col("ua_last_date")).dt.total_days().cast(pl.Float64).alias("ua_age_days")
+        )
+        .with_columns(
+            (pl.col("ua_cnt") * 2.0 + 10.0 / (1.0 + pl.col("ua_age_days"))).alias("ua_recent_score")
+        )
+        .sort(["customer_id", "ua_recent_score", "ua_last_date"], descending=[False, True, True])
+        .group_by("customer_id")
+        .agg(pl.col("article_id").head(USER_RECENT_TOP).alias("hist_items"))
+    )
+    result: dict[str, list[str]] = {}
+    for row in history.iter_rows(named=True):
+        result[row["customer_id"]] = row["hist_items"] or []
+    return result
+
+
+def _build_user_long_history(train_tx: pl.DataFrame) -> dict[str, list[str]]:
     history = (
         train_tx.group_by(["customer_id", "article_id"])
         .agg(
@@ -188,7 +333,7 @@ def _build_user_history(train_tx: pl.DataFrame) -> dict[str, list[str]]:
         )
         .sort(["customer_id", "ua_cnt", "ua_last_date"], descending=[False, True, True])
         .group_by("customer_id")
-        .agg(pl.col("article_id").head(USER_HISTORY_TOP).alias("hist_items"))
+        .agg(pl.col("article_id").head(USER_LONG_TOP).alias("hist_items"))
     )
     result: dict[str, list[str]] = {}
     for row in history.iter_rows(named=True):
@@ -228,6 +373,36 @@ def _build_customer_pref_department(tx_with_dept: pl.DataFrame) -> dict[str, int
     result: dict[str, int] = {}
     for row in pref.iter_rows(named=True):
         result[row["customer_id"]] = int(row["pref_department"])
+    return result
+
+
+def _build_age_top(
+    train_tx: pl.DataFrame,
+    customer_age_bin: dict[str, str],
+    ref_date: date,
+) -> dict[str, list[str]]:
+    if not customer_age_bin:
+        return {}
+    age_df = pl.DataFrame(
+        {
+            "customer_id": list(customer_age_bin.keys()),
+            "age_bin": list(customer_age_bin.values()),
+        }
+    )
+    cutoff = ref_date - timedelta(days=30)
+    age_top = (
+        train_tx.filter(pl.col("t_dat") >= pl.lit(cutoff))
+        .join(age_df, on="customer_id", how="left")
+        .drop_nulls(["age_bin"])
+        .group_by(["age_bin", "article_id"])
+        .agg(pl.len().alias("pop_30d"))
+        .sort(["age_bin", "pop_30d", "article_id"], descending=[False, True, False])
+        .group_by("age_bin")
+        .agg(pl.col("article_id").head(AGE_TOP).alias("age_items"))
+    )
+    result: dict[str, list[str]] = {}
+    for row in age_top.iter_rows(named=True):
+        result[row["age_bin"]] = row["age_items"] or []
     return result
 
 
@@ -298,23 +473,65 @@ def _build_global_top(train_tx: pl.DataFrame, ref_date: date) -> list[str]:
     return merged[:GLOBAL_TOP]
 
 
-def fit_recommender(train_tx: pl.DataFrame, article_department: pl.DataFrame) -> RecommenderArtifacts:
+def _build_trend_top(train_tx: pl.DataFrame, ref_date: date) -> list[str]:
+    cutoff_7d = ref_date - timedelta(days=7)
+    cutoff_30d = ref_date - timedelta(days=30)
+    pop_7d = (
+        train_tx.filter(pl.col("t_dat") >= pl.lit(cutoff_7d))
+        .group_by("article_id")
+        .agg(pl.len().alias("pop_7d"))
+    )
+    pop_30d = (
+        train_tx.filter(pl.col("t_dat") >= pl.lit(cutoff_30d))
+        .group_by("article_id")
+        .agg(pl.len().alias("pop_30d"))
+    )
+    trend_df = (
+        pop_7d.join(pop_30d, on="article_id", how="full")
+        .with_columns(
+            pl.coalesce([pl.col("article_id"), pl.col("article_id_right")]).alias("article_id"),
+            pl.coalesce([pl.col("pop_7d"), pl.lit(0)]).cast(pl.Float64).alias("pop_7d"),
+            pl.coalesce([pl.col("pop_30d"), pl.lit(0)]).cast(pl.Float64).alias("pop_30d"),
+        )
+        .select("article_id", "pop_7d", "pop_30d")
+        .with_columns((pl.col("pop_7d") * 2.0 + pl.col("pop_30d") * 0.3).alias("trend_score"))
+        .sort(["trend_score", "pop_7d", "article_id"], descending=[True, True, False])
+        .select(pl.col("article_id").head(TREND_TOP))
+    )
+    return trend_df.get_column("article_id").to_list()
+
+
+def fit_recommender(
+    train_tx: pl.DataFrame,
+    article_department: pl.DataFrame,
+    customer_age_bin: dict[str, str] | None = None,
+) -> RecommenderArtifacts:
     reference_date = train_tx.get_column("t_dat").max()
+    customer_age_bin = customer_age_bin or {}
     tx_with_dept = train_tx.join(article_department, on="article_id", how="left")
-    user_history = _build_user_history(train_tx)
+    user_recent_history = _build_user_recent_history(train_tx, reference_date)
+    user_long_history = _build_user_long_history(train_tx)
     customer_pref_channel = _build_customer_pref_channel(train_tx)
     customer_pref_department = _build_customer_pref_department(tx_with_dept)
+    age_top_items = _build_age_top(train_tx, customer_age_bin=customer_age_bin, ref_date=reference_date)
     channel_top_items = _build_channel_top(train_tx, reference_date)
     department_top_items = _build_department_top(tx_with_dept, reference_date)
+    trend_top_items = _build_trend_top(train_tx, reference_date)
     global_top_items = _build_global_top(train_tx, reference_date)
+    trend_rank = {item: idx for idx, item in enumerate(trend_top_items)}
     global_rank = {item: idx for idx, item in enumerate(global_top_items)}
     return RecommenderArtifacts(
         reference_date=reference_date,
-        user_history=user_history,
+        user_recent_history=user_recent_history,
+        user_long_history=user_long_history,
+        customer_age_bin=customer_age_bin,
         customer_pref_channel=customer_pref_channel,
         customer_pref_department=customer_pref_department,
+        age_top_items=age_top_items,
         channel_top_items=channel_top_items,
         department_top_items=department_top_items,
+        trend_top_items=trend_top_items,
+        trend_rank=trend_rank,
         global_top_items=global_top_items,
         global_rank=global_rank,
     )
@@ -322,12 +539,27 @@ def fit_recommender(train_tx: pl.DataFrame, article_department: pl.DataFrame) ->
 
 def _build_prediction_context(artifacts: RecommenderArtifacts, ranker_config: RankerConfig) -> PredictionContext:
     base_global_scores: dict[str, float] = {}
+    base_trend_scores: dict[str, float] = {}
     if ranker_config.global_weight > 0:
         for idx, item in enumerate(artifacts.global_top_items):
             base_global_scores[item] = ranker_config.global_weight / (idx + 1)
+    if ranker_config.trend_weight > 0:
+        for idx, item in enumerate(artifacts.trend_top_items):
+            base_trend_scores[item] = ranker_config.trend_weight / (idx + 1)
+
+    cold_start: list[str] = []
+    seen: set[str] = set()
+    for item in artifacts.trend_top_items + artifacts.global_top_items:
+        if item in seen:
+            continue
+        cold_start.append(item)
+        seen.add(item)
+        if len(cold_start) >= MAX_K:
+            break
     return PredictionContext(
         base_global_scores=base_global_scores,
-        cold_start_prediction=artifacts.global_top_items[:MAX_K],
+        base_trend_scores=base_trend_scores,
+        cold_start_prediction=cold_start[:MAX_K],
     )
 
 
@@ -341,10 +573,15 @@ def predict_lists_for_customers(
 ) -> list[list[str]]:
     context = _build_prediction_context(artifacts, ranker_config)
     global_items = artifacts.global_top_items
+    trend_items = artifacts.trend_top_items
+    trend_rank = artifacts.trend_rank
     global_rank = artifacts.global_rank
-    user_history = artifacts.user_history
+    user_recent_history = artifacts.user_recent_history
+    user_long_history = artifacts.user_long_history
+    customer_age_bin = artifacts.customer_age_bin
     pref_channel_map = artifacts.customer_pref_channel
     pref_department_map = artifacts.customer_pref_department
+    age_top_items = artifacts.age_top_items
     channel_top_items = artifacts.channel_top_items
     department_top_items = artifacts.department_top_items
     log_every = 200000
@@ -352,37 +589,53 @@ def predict_lists_for_customers(
     results: list[list[str]] = []
     total = len(customer_ids)
     for idx, customer_id in enumerate(customer_ids, start=1):
-        user_items = user_history.get(customer_id, [])
+        user_recent_items = user_recent_history.get(customer_id, [])
+        user_long_items = user_long_history.get(customer_id, [])
+        age_bin = customer_age_bin.get(customer_id)
+        age_items = age_top_items.get(age_bin, []) if age_bin is not None else []
         pref_channel = pref_channel_map.get(customer_id)
         pref_department = pref_department_map.get(customer_id)
         channel_items = channel_top_items.get(pref_channel, []) if pref_channel is not None else []
         department_items = department_top_items.get(pref_department, []) if pref_department is not None else []
 
-        if not user_items and pref_channel is None and pref_department is None:
-            ranked_items = context.cold_start_prediction[:k]
-        else:
-            scores = context.base_global_scores.copy()
-            for pos, item in enumerate(user_items):
-                scores[item] = scores.get(item, 0.0) + ranker_config.user_weight / (pos + 1)
-            for pos, item in enumerate(channel_items):
-                scores[item] = scores.get(item, 0.0) + ranker_config.channel_weight / (pos + 1)
-            for pos, item in enumerate(department_items):
-                scores[item] = scores.get(item, 0.0) + ranker_config.department_weight / (pos + 1)
+        scores = context.base_global_scores.copy()
+        for item, score in context.base_trend_scores.items():
+            scores[item] = scores.get(item, 0.0) + score
 
-            ranked_pairs = sorted(
-                scores.items(),
-                key=lambda kv: (-kv[1], global_rank.get(kv[0], 10**9), kv[0]),
-            )
-            ranked_items = [item for item, _ in ranked_pairs[:k]]
-            if len(ranked_items) < k:
-                seen = set(ranked_items)
-                for item in global_items:
+        for pos, item in enumerate(user_recent_items):
+            scores[item] = scores.get(item, 0.0) + ranker_config.user_weight / (pos + 1)
+        for pos, item in enumerate(user_long_items):
+            scores[item] = scores.get(item, 0.0) + ranker_config.long_history_weight / (pos + 1)
+        for pos, item in enumerate(channel_items):
+            scores[item] = scores.get(item, 0.0) + ranker_config.channel_weight / (pos + 1)
+        for pos, item in enumerate(department_items):
+            scores[item] = scores.get(item, 0.0) + ranker_config.department_weight / (pos + 1)
+        for pos, item in enumerate(age_items):
+            scores[item] = scores.get(item, 0.0) + ranker_config.age_weight / (pos + 1)
+
+        ranked_pairs = sorted(
+            scores.items(),
+            key=lambda kv: (
+                -kv[1],
+                trend_rank.get(kv[0], 10**9),
+                global_rank.get(kv[0], 10**9),
+                kv[0],
+            ),
+        )
+        ranked_items = [item for item, _ in ranked_pairs[:k]]
+
+        if len(ranked_items) < k:
+            seen = set(ranked_items)
+            for source_items in (age_items, trend_items, global_items, context.cold_start_prediction):
+                for item in source_items:
                     if item not in seen:
                         ranked_items.append(item)
                         seen.add(item)
                     if len(ranked_items) >= k:
                         break
-            ranked_items = ranked_items[:k]
+                if len(ranked_items) >= k:
+                    break
+        ranked_items = ranked_items[:k]
         results.append(ranked_items)
 
         if show_progress and total >= log_every and (idx % log_every == 0 or idx == total):
@@ -465,13 +718,24 @@ def load_ranker_from_cache(
         metrics = metrics.sort(sort_cols, descending=descending)
     row = metrics.row(0, named=True)
 
-    required_weight_cols = {"user_weight", "channel_weight", "department_weight", "global_weight"}
+    required_weight_cols = {
+        "user_weight",
+        "long_history_weight",
+        "channel_weight",
+        "department_weight",
+        "age_weight",
+        "trend_weight",
+        "global_weight",
+    }
     if required_weight_cols.issubset(metrics.columns):
         cfg = RankerConfig(
             name=str(row.get("config", "cached_ranker")),
             user_weight=float(row["user_weight"]),
+            long_history_weight=float(row["long_history_weight"]),
             channel_weight=float(row["channel_weight"]),
             department_weight=float(row["department_weight"]),
+            age_weight=float(row["age_weight"]),
+            trend_weight=float(row["trend_weight"]),
             global_weight=float(row["global_weight"]),
         )
         print(f"use cached ranker weights: {describe_ranker(cfg)}")
@@ -491,6 +755,7 @@ def generate_submission(
     tables: dict[str, pl.LazyFrame],
     transactions: pl.DataFrame,
     article_department: pl.DataFrame,
+    customer_age_bin: dict[str, str],
     ranker_config: RankerConfig,
     output_dir: Path = OUTPUT_DIR,
 ) -> pl.DataFrame:
@@ -501,7 +766,11 @@ def generate_submission(
         .get_column("customer_id")
         .to_list()
     )
-    artifacts = fit_recommender(transactions, article_department=article_department)
+    artifacts = fit_recommender(
+        transactions,
+        article_department=article_department,
+        customer_age_bin=customer_age_bin,
+    )
     prediction_lists = predict_lists_for_customers(
         customer_ids=customer_ids,
         artifacts=artifacts,
@@ -525,11 +794,13 @@ def run_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
     summary = summarize_inputs(tables)
     transactions = prepare_transactions(tables["transactions"])
     article_department = prepare_article_department(tables["articles"])
+    customer_age_bin = prepare_customer_age_bin(tables["customers"])
     ranker_config = load_ranker_from_cache(output_dir=prepare_output_dir(OUTPUT_DIR))
     submission = generate_submission(
         tables=tables,
         transactions=transactions,
         article_department=article_department,
+        customer_age_bin=customer_age_bin,
         ranker_config=ranker_config,
         output_dir=OUTPUT_DIR,
     )

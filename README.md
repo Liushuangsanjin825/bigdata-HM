@@ -4,9 +4,10 @@
 
 本仓库当前阶段定位：
 - 已完成并提交任务书中的第一阶段（期中考核，20%）
-- 第二阶段已推进到 baseline+，并完成“生成层/评估层”职责拆分：
-  - `Final_Project.py` 仅负责生成提交文件 `outputs/submission.csv`
-  - `Final_Project_Eval.py` 独立负责离线评估与调参
+- 第二阶段已推进到“可持续调参 + 可追踪实验”阶段，并完成“生成层/评估层”职责拆分：
+  - `Final_Project.py` 负责生成提交文件 `outputs/submission.csv`
+  - `Final_Project_Eval.py` 负责离线评估与调参
+  - `experiments/` 统一管理每次调参与 Kaggle 成绩记录
 - 第三阶段（答辩与贡献，15%）尚未在本仓库完成
 
 ## 1. 任务书评分结构对齐
@@ -18,7 +19,7 @@
 4. 答辩与贡献度（15%）：GitHub 提交记录与答辩表现
 
 当前仓库仅完整覆盖第 1 项（期中考核）。
-当前第 2 项已完成 baseline+ 工程实现（可运行脚本、离线 MAP@12 评估、提交文件生成与格式校验），并完成生成层与评估层解耦。
+当前第 2 项已完成“多路融合推荐器 + 可持续调参与实验追踪”工程实现（可运行脚本、离线 MAP@12 评估、提交文件生成与格式校验），并完成生成层与评估层解耦。
 
 ## 2. H&M 赛题关键规则（官方信息提炼）
 
@@ -63,6 +64,7 @@
 - `Final_Project.ipynb`：第二阶段展示型 notebook（已对齐“生成层/评估层”拆分）
 - `doc_images/`：期中阶段关键图表
 - `task.md`：任务书要求映射与当前完成状态
+- `experiments/`：调参与线上分数追踪目录（离线 run 快照 + 总索引）
 - `AI_Assistant_Memo.md`：给后续智能体的接手规范与工作流程
 - `requirements.txt`：当前 notebook 运行依赖
 - `大作业考核任务书(Project_Evaluation).pdf`：课程任务书原文
@@ -97,6 +99,8 @@ python Final_Project_Eval.py
 
 5. 仓库内已包含课程任务书 PDF；如需在 notebook 或脚本里读取 PDF 文本，请先安装依赖并使用 `pypdf`。
 
+6. 若进行新一轮调参，请按 `experiments/README.md` 记录 run 与 Kaggle 分数，保证实验可追踪。
+
 ## 6. 依赖说明
 
 - numpy
@@ -109,9 +113,30 @@ python Final_Project_Eval.py
 ## 7. 阶段状态
 
 - [x] 第一阶段：期中 EDA 与清洗规则
-- [ ] 第二阶段：Final_Project 流水线、K-Fold、XAI、Submission（已完成 baseline+：5 折时间窗口 MAP@12 评估 + 三路召回 + 提交格式校验）
+- [ ] 第二阶段：Final_Project 流水线、K-Fold、XAI、Submission（已完成可持续调参与实验追踪；当前 5 折离线 MAP@12 均值 `0.020833`，已登记官方分数 Public `0.01841` / Private `0.01847`）
 - [ ] 第三阶段：Kaggle 公开榜证明与答辩材料
 
-## 8. 说明
+## 8. 调参实验管理
+
+实验追踪统一使用 `experiments/` 目录：
+
+- `experiments/tuning_runs/`：每次 run 的快照目录。
+- `experiments/runs_index.csv`：离线实验总索引（run_id、参数、离线分数、提交哈希）。
+- `experiments/kaggle_scores.csv`：手动提交 Kaggle 后填写 Public/Private 分数。
+
+当前最佳离线记录（截至 2026-04-27）：
+
+- `run_id`: `run_2026-04-27_001_hybrid_multisource`
+- `best_config`: `local_u40_l7_c5_d5_a5_t5.5_g1.2`
+- `offline_mean_map12`: `0.020833152816925597`
+
+当前已登记官方成绩（截至 2026-04-27）：
+
+- `run_id`: `run_2026-04-27_001_hybrid_multisource`
+- `public_score`: `0.01841`
+- `private_score`: `0.01847`
+- `submission status`: `after deadline`（late submission）
+
+## 9. 说明
 
 本仓库当前内容用于体现“已完成考核任务（期中）”的代码与材料，不代表最终全量大作业已经完成。

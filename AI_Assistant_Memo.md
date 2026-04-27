@@ -8,9 +8,12 @@
 
 1. [README.md](README.md)
 2. [task.md](task.md)
-3. [requirements.txt](requirements.txt)
-4. [大作业考核任务书(Project_Evaluation).pdf](大作业考核任务书(Project_Evaluation).pdf)
-5. [EDA_Checkpoint.ipynb](EDA_Checkpoint.ipynb)
+3. [experiments/README.md](experiments/README.md)
+4. [experiments/runs_index.csv](experiments/runs_index.csv)
+5. [experiments/kaggle_scores.csv](experiments/kaggle_scores.csv)
+6. [requirements.txt](requirements.txt)
+7. [大作业考核任务书(Project_Evaluation).pdf](大作业考核任务书(Project_Evaluation).pdf)
+8. [EDA_Checkpoint.ipynb](EDA_Checkpoint.ipynb)
 
 先确认当前阶段，只做已经对齐的部分，不把未完成阶段写成已完成。
 
@@ -23,7 +26,7 @@
 3. Kaggle 打榜（15%）：MAP@12 竞赛结果与证明材料
 4. 答辩与贡献度（15%）：GitHub 提交记录与答辩表现
 
-当前仓库只要求把第一阶段做扎实，后续阶段要显式标记为未完成或待补充。
+当前仓库已进入第二阶段（期末工程交付）持续优化阶段，包含离线调参与 Kaggle 成绩追踪；第三阶段（答辩）仍未完成，必须显式标注未完成状态。
 
 ## 3. 当前仓库规范
 
@@ -32,6 +35,7 @@
 - 只修改和当前任务相关的文件。
 - 只在能被任务书或现有内容支持的范围内下结论。
 - 如果是期中阶段，就只补 EDA、清洗规则、图表结论和执行记录。
+- 如果是第二阶段调参与提交，必须同步维护 `experiments/` 台账（离线 run + 官方分数）。
 
 ### 3.2 依赖与环境
 
@@ -129,6 +133,17 @@
 
 如果是联合查询或生成代码，最好把“AI 负责什么、人负责什么”写清楚。
 
+### 6.2 `experiments/` 更新规则（第二阶段必须遵守）
+
+- 每次新调参 run 都要在 `experiments/tuning_runs/` 新建快照目录，并保留：
+  - `ranker_tuning_metrics.csv`
+  - `offline_fold_metrics.csv`
+  - `selected_ranker.csv`
+  - `submission_sha256.txt`
+- 每次 run 必须追加更新 `experiments/runs_index.csv`，确保 `run_id` 唯一且可追溯。
+- 每次手动提交 Kaggle 后，必须更新 `experiments/kaggle_scores.csv` 的 `public_score`、`private_score` 与提交时间。
+- `README.md` 中“当前最佳离线记录 / 当前已登记官方成绩”应与 `experiments/` 台账保持一致。
+
 ## 7. 提交前清单
 
 - [ ] README 和 task 与实际状态一致
@@ -136,6 +151,7 @@
 - [ ] requirements 与 notebook 导入一致
 - [ ] PDF 读取、图表导出等能力已写进说明
 - [ ] 任务书要求没有被误写成已完成
+- [ ] `experiments/runs_index.csv` 与 `experiments/kaggle_scores.csv` 已同步更新
 - [ ] `.venv` 没有被提交
 - [ ] 已完成必要的 git 提交
 
@@ -145,3 +161,4 @@
 
 1. 对照任务书判断当前阶段，只做对应部分。
 2. 每次改动都让文档、notebook、依赖、提交记录四者保持一致。
+3. 第二阶段优化必须执行“先离线 run 归档，再登记官方分数”的闭环。

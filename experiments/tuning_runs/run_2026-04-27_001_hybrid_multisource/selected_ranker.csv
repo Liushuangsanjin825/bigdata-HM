@@ -1,0 +1,2 @@
+config,user_weight,long_history_weight,channel_weight,department_weight,age_weight,trend_weight,global_weight
+local_u40_l7_c5_d5_a5_t5.5_g1.2,40.0,7.0,5.0,5.0,5.0,5.5,1.2

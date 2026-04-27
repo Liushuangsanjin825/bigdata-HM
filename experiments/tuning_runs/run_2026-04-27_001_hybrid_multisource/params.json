@@ -1,0 +1,32 @@
+{
+  "run_id": "run_2026-04-27_001_hybrid_multisource",
+  "created_at": "2026-04-27 15:16:11",
+  "git_commit": "47b9126",
+  "model_family": "heuristic multi-source recommender",
+  "feature_set": [
+    "user_recent_history",
+    "user_long_history",
+    "channel_top_items",
+    "department_top_items",
+    "age_top_items",
+    "trend_top_items",
+    "global_top_items"
+  ],
+  "weights": {
+    "config": "local_u40_l7_c5_d5_a5_t5.5_g1.2",
+    "user_weight": 40.0,
+    "long_history_weight": 7.0,
+    "channel_weight": 5.0,
+    "department_weight": 5.0,
+    "age_weight": 5.0,
+    "trend_weight": 5.5,
+    "global_weight": 1.2
+  },
+  "evaluation": {
+    "tuning_folds": 3,
+    "tuning_customer_cap": 40000,
+    "offline_folds": 5,
+    "window_days": 7,
+    "offline_customer_cap": null
+  }
+}

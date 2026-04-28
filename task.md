@@ -219,3 +219,19 @@
 	- 更新 `README.md` 中“调参实验管理”章节，新增“当前已登记官方成绩”信息。
 4. 结果：
 	- 当前 run 的离线与线上分数已可通过 `run_id` 直接关联，后续可持续跟踪“离线提升是否转化为线上提升”。
+
+## 16. LightGBM 模型优化流水线补充（2026-04-28）
+
+1. 目标：在现有规则融合 baseline 分数偏低的基础上，按“扩展候选召回 → 构造候选训练集 → 训练 LightGBM → MAP@12 时间窗口验证 → 生成 submission.csv”的流程升级模型。
+2. 输入：`Final_Project.py` 中的数据读取、规则推荐器与提交校验函数；Kaggle H&M 官方数据集路径；用户提出的五步优化流程。
+3. 动作：
+	- 新增 `Final_Project_LGBM.py`，作为独立增强版流水线，不破坏原有 `Final_Project.py` 稳定 baseline。
+	- 复用规则推荐器生成候选商品，并补充用户特征、商品热度特征、用户-商品交叉特征与商品属性特征。
+	- 构造带标签的候选训练集：使用历史窗口作为特征期、未来 7 天真实购买作为标签。
+	- 使用 LightGBM 二分类模型对候选商品进行排序，按预测概率为每个用户取前 12 个商品。
+	- 新增单窗口 MAP@12 离线验证，并输出 `outputs/lgbm_validation_metrics.csv` 与 `outputs/lgbm_feature_importance.csv`。
+	- 更新 `requirements.txt`，增加 `lightgbm` 依赖；更新 `README.md`，补充 Kaggle Notebook 运行入口。
+4. 结果：
+	- 新增增强版脚本：`Final_Project_LGBM.py`。
+	- 已完成本地语法校验：`python -m py_compile Final_Project.py Final_Project_Eval.py Final_Project_LGBM.py`。
+	- 由于完整数据集位于 Kaggle，本地未执行全量训练；完整验证与 `submission.csv` 生成需在 Kaggle Notebook 数据环境中运行。

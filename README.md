@@ -61,6 +61,7 @@
 - `EDA_Checkpoint.ipynb`：期中 EDA 与清洗方案 notebook
 - `Final_Project.py`：第二阶段生成层脚本，仅负责输出 `outputs/submission.csv`
 - `Final_Project_Eval.py`：第二阶段评估层脚本，负责离线评估与权重调参
+- `Final_Project_LGBM.py`：增强版 LightGBM 排序/分类流水线，负责扩展候选、构造训练集、离线 MAP@12 验证并生成 `outputs/submission.csv`
 - `Final_Project.ipynb`：第二阶段展示型 notebook（已对齐“生成层/评估层”拆分）
 - `doc_images/`：期中阶段关键图表
 - `task.md`：任务书要求映射与当前完成状态
@@ -95,14 +96,31 @@ python Final_Project.py
 python Final_Project_Eval.py
 ```
 
-4. 数据目录配置（推荐环境变量）：
+4. 增强版 LightGBM 流水线（推荐在 Kaggle Notebook 上运行，耗时较长）：
+
+```bash
+python Final_Project_LGBM.py
+```
+
+Kaggle Notebook 中建议先设置数据路径，并将最终提交文件复制到工作目录根部：
+
+```python
+import os
+
+os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recommendations"
+
+!python Final_Project_LGBM.py
+!cp outputs/submission.csv /kaggle/working/submission.csv
+```
+
+5. 数据目录配置（推荐环境变量）：
    - 推荐设置环境变量 `HNM_DATA_PATH` 指向你本机的数据目录。
    - 也可直接在脚本内调整 `BASE_PATH`。
    - `Final_Project.py` 默认输出到仓库内 `outputs/submission.csv`（文件名固定不变）。
 
-5. 仓库内已包含课程任务书 PDF；如需在 notebook 或脚本里读取 PDF 文本，请先安装依赖并使用 `pypdf`。
+6. 仓库内已包含课程任务书 PDF；如需在 notebook 或脚本里读取 PDF 文本，请先安装依赖并使用 `pypdf`。
 
-6. 若进行新一轮调参，请按 `experiments/README.md` 记录 run 与 Kaggle 分数，保证实验可追踪。
+7. 若进行新一轮调参，请按 `experiments/README.md` 记录 run 与 Kaggle 分数，保证实验可追踪。
 
 ## 6. 依赖说明
 
@@ -112,6 +130,7 @@ python Final_Project_Eval.py
 - matplotlib
 - jupyter
 - pypdf
+- lightgbm
 
 ## 7. 阶段状态
 

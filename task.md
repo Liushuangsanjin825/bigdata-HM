@@ -71,6 +71,7 @@
 3. XAI 可解释性补全：SHAP 或 LIME 分析与报告
 4. 竞赛交付补全：Kaggle 提交与 MAP@12 证明材料
 5. 答辩展示材料与个人贡献说明
+6. 从消融报告中提炼明确优化启发（候选特征去留与下一轮实验优先级），完成验证后同步文档并上传 GitHub
 
 ## 6. 当前结论
 
@@ -220,7 +221,7 @@
 4. 结果：
 	- 当前 run 的离线与线上分数已可通过 `run_id` 直接关联，后续可持续跟踪“离线提升是否转化为线上提升”。
 
-## 16. LightGBM 模型优化流水线补充（2026-04-28）
+## 16. LightGBM 模型优化流水线补充（2026-04-28，2026-04-29补充）
 
 1. 目标：在现有规则融合 baseline 分数偏低的基础上，按“扩展候选召回 → 构造候选训练集 → 训练 LightGBM → MAP@12 时间窗口验证 → 生成 submission.csv”的流程升级模型。
 2. 输入：`Final_Project.py` 中的数据读取、规则推荐器与提交校验函数；Kaggle H&M 官方数据集路径；用户提出的五步优化流程。
@@ -231,10 +232,15 @@
 	- 使用 LightGBM 二分类模型对候选商品进行排序，按预测概率为每个用户取前 12 个商品。
 	- 新增单窗口 MAP@12 离线验证，并输出 `outputs/lgbm_validation_metrics.csv` 与 `outputs/lgbm_feature_importance.csv`。
 	- 更新 `requirements.txt`，增加 `lightgbm` 依赖；更新 `README.md`，补充 Kaggle Notebook 运行入口。
+	- （2026-04-29补充）在不新增调参任务的前提下，沿用既有 ranker 权重与训练参数复跑 `Final_Project_Eval.py`、`Final_Project.py`、`Final_Project_LGBM.py`，刷新本地产物并用于官方提交。
+	- （2026-04-29补充）为降低长时运行内存峰值，仅做最小工程化改动：`Final_Project_LGBM.py` 将 `SUBMISSION_CUSTOMER_CHUNK` 从 `50000` 调整到 `20000`，并在每个提交分块后主动释放中间对象；未修改特征集合、候选策略与 LightGBM 超参数。
 4. 结果：
 	- 新增增强版脚本：`Final_Project_LGBM.py`。
 	- 已完成本地语法校验：`python -m py_compile Final_Project.py Final_Project_Eval.py Final_Project_LGBM.py`。
-	- 由于完整数据集位于 Kaggle，本地未执行全量训练；完整验证与 `submission.csv` 生成需在 Kaggle Notebook 数据环境中运行。
+	- （2026-04-28时点）由于完整数据集位于 Kaggle，本地未执行全量训练；完整验证与 `submission.csv` 生成需在 Kaggle Notebook 数据环境中运行。
+	- （2026-04-29补充）已在本地数据路径 `G:\h-and-m-personalized-fashion-recommendations` 完整执行增强流水线并生成 `outputs/submission.csv`，同时刷新 `outputs/lgbm_validation_metrics.csv` 与 `outputs/lgbm_feature_importance.csv`。
+	- （2026-04-29补充）LGBM 单窗口离线验证结果：`history_end=2020-09-15`，`label=2020-09-16~2020-09-22`，`customer_count=60000`，`candidate_rows=4800000`，`MAP@12=0.030605012565942353`。
+	- （2026-04-29补充）官方提交成绩（用户截图）已登记：Public `0.02679`，Private `0.02717`，状态 `after deadline`。
 
 ## 17. LightGBM 消融实验与 SHAP 分析补充（2026-04-29）
 
@@ -250,4 +256,5 @@
 4. 结果：
 	- 已完成 notebook JSON 结构校验：`python -m json.tool LGBM_Ablation_SHAP_Analysis.ipynb`。
 	- 已完成相关脚本语法校验：`python -m py_compile Final_Project.py Final_Project_LGBM.py LGBM_Ablation_SHAP_Analysis.py`。
-	- 因完整数据集位于 Kaggle，消融数值、SHAP 图和最终解释需在 Kaggle Notebook 运行后生成。
+	- 已在仓库 `homework/` 归档消融与解释产物：`HM_LGBM_Ablation_SHAP_Report.md`、`HM_LGBM_Ablation_SHAP_Report.pdf`、`lgbm_ablation_top5.csv`、`lgbm_gain_importance.csv`、`shap_mean_abs_importance.csv`、`shap_beeswarm.png`、`shap_waterfall_sample0.png`。
+	- 后续若需复现实验过程，可在 Kaggle Notebook 环境按相同脚本重新执行并比对上述归档结果。

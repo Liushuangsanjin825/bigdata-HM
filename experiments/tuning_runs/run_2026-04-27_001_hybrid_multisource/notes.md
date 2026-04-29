@@ -24,4 +24,5 @@
 - Public: `0.01841`
 - Private: `0.01847`
 - 提交状态：`after deadline`（late submission）
+- LGBM 增强复跑（2026-04-29）：Public `0.02679` / Private `0.02717`（after deadline）
 - 明细台账见 `experiments/kaggle_scores.csv`。

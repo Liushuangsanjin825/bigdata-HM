@@ -64,6 +64,9 @@
 - `Final_Project_LGBM.py`：增强版 LightGBM 排序/分类流水线，负责扩展候选、构造训练集、离线 MAP@12 验证并生成 `outputs/submission.csv`
 - `LGBM_Ablation_SHAP_Analysis.ipynb`：LightGBM baseline 的 Top-5 特征消融实验与 SHAP 可解释性分析 notebook
 - `LGBM_Ablation_SHAP_Analysis.py`：同上分析的脚本版入口，适合在 Kaggle 直接运行并查看日志
+- `homework/HM_LGBM_Ablation_SHAP_Report.md`：消融与 SHAP 分析报告（Markdown 版）
+- `homework/HM_LGBM_Ablation_SHAP_Report.pdf`：消融与 SHAP 分析报告（PDF 版）
+- `homework/` 下其余文件：已归档的消融表与 SHAP 图（`lgbm_ablation_top5.csv`、`lgbm_gain_importance.csv`、`shap_mean_abs_importance.csv`、`shap_beeswarm.png`、`shap_waterfall_sample0.png`）
 - `Final_Project.ipynb`：第二阶段展示型 notebook（已对齐“生成层/评估层”拆分）
 - `doc_images/`：期中阶段关键图表
 - `task.md`：任务书要求映射与当前完成状态
@@ -164,7 +167,7 @@ LGBM_Ablation_SHAP_Analysis.ipynb
 ## 7. 阶段状态
 
 - [x] 第一阶段：期中 EDA 与清洗规则
-- [ ] 第二阶段：Final_Project 流水线、K-Fold、XAI、Submission（已完成可持续调参与实验追踪；当前 5 折离线 MAP@12 均值 `0.020833`，已登记官方分数 Public `0.01841` / Private `0.01847`）
+- [ ] 第二阶段：Final_Project 流水线、K-Fold、XAI、Submission（已完成可持续调参与实验追踪；规则融合 5 折离线 MAP@12 最佳均值 `0.020833`，LGBM 单窗口验证 MAP@12 `0.030605`；已登记官方分数 baseline Public `0.01841` / Private `0.01847`，LGBM Public `0.02679` / Private `0.02717`）
 - [ ] 第三阶段：Kaggle 公开榜证明与答辩材料
 
 ## 8. 调参实验管理
@@ -175,18 +178,22 @@ LGBM_Ablation_SHAP_Analysis.ipynb
 - `experiments/runs_index.csv`：离线实验总索引（run_id、参数、离线分数、提交哈希）。
 - `experiments/kaggle_scores.csv`：手动提交 Kaggle 后填写 Public/Private 分数。
 
-当前最佳离线记录（截至 2026-04-27）：
+当前最佳离线记录（截至 2026-04-29，最佳 run 产生于 2026-04-27）：
 
 - `run_id`: `run_2026-04-27_001_hybrid_multisource`
 - `best_config`: `local_u40_l7_c5_d5_a5_t5.5_g1.2`
 - `offline_mean_map12`: `0.020833152816925597`
+- `latest_replay_offline_mean_map12`（2026-04-29 复跑）: `0.0207343934751573`
+- `lgbm_single_window_map12`（2026-04-29）: `0.030605012565942353`
 
-当前已登记官方成绩（截至 2026-04-27）：
+当前已登记官方成绩（截至 2026-04-29）：
 
 - `run_id`: `run_2026-04-27_001_hybrid_multisource`
-- `public_score`: `0.01841`
-- `private_score`: `0.01847`
+- `latest_submission_variant`: `Final_Project_LGBM.py`（延续 task 第16条补充）
+- `public_score`: `0.02679`
+- `private_score`: `0.02717`
 - `submission status`: `after deadline`（late submission）
+- `historical baseline score`: Public `0.01841` / Private `0.01847`
 
 ## 9. 说明
 

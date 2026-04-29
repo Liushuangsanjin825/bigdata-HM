@@ -13,6 +13,7 @@ The original `Final_Project.py` remains the stable submission-only baseline.
 
 from __future__ import annotations
 
+import gc
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -57,7 +58,8 @@ VALIDATION_CUSTOMER_CAP = 60000
 TRAIN_CUSTOMER_CAP = 80000
 NEGATIVE_SAMPLE_RATIO = 20
 MAX_CANDIDATES_PER_CUSTOMER = 80
-SUBMISSION_CUSTOMER_CHUNK = 50000
+# Keep predictions unchanged while lowering per-chunk peak memory.
+SUBMISSION_CUSTOMER_CHUNK = 20000
 
 AGE_BIN_TO_ID = {
     "u18": 0,
@@ -687,6 +689,9 @@ def generate_lgbm_submission(
                         break
             all_rows.append({"customer_id": customer_id, "prediction": " ".join(items[:MAX_K])})
         print(f"[LGBM submission] {end}/{total} customers done")
+        # Release per-chunk tables aggressively to reduce memory pressure.
+        del candidates, features, scored, pred_map, fallback_lists
+        gc.collect()
 
     submission = pl.DataFrame(all_rows)
     validate_submission_format(submission, customer_ids, k=MAX_K)

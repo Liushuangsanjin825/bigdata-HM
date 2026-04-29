@@ -1,2 +1,3 @@
 run_id,submit_time,submission_file,public_score,private_score,is_late_submission,note
 run_2026-04-27_001_hybrid_multisource,2026-04-27 15:22:37,outputs/submission.csv,0.01841,0.01847,true,official Kaggle result from screenshot
+run_2026-04-27_001_hybrid_multisource,2026-04-29 20:17:18,outputs/submission.csv,0.02679,0.02717,true,LGBM enhanced submission (task #16 supplement, no new tuning task)

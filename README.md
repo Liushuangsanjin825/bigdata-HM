@@ -63,6 +63,7 @@
 - `Final_Project_Eval.py`：第二阶段评估层脚本，负责离线评估与权重调参
 - `Final_Project_LGBM.py`：增强版 LightGBM 排序/分类流水线，负责扩展候选、构造训练集、离线 MAP@12 验证并生成 `outputs/submission.csv`
 - `LGBM_Ablation_SHAP_Analysis.ipynb`：LightGBM baseline 的 Top-5 特征消融实验与 SHAP 可解释性分析 notebook
+- `LGBM_Ablation_SHAP_Analysis.py`：同上分析的脚本版入口，适合在 Kaggle 直接运行并查看日志
 - `Final_Project.ipynb`：第二阶段展示型 notebook（已对齐“生成层/评估层”拆分）
 - `doc_images/`：期中阶段关键图表
 - `task.md`：任务书要求映射与当前完成状态
@@ -118,6 +119,19 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 
 ```text
 LGBM_Ablation_SHAP_Analysis.ipynb
+```
+
+也可以直接运行脚本版（通常比 `nbconvert` 执行 notebook 更轻便）：
+
+```python
+!cp /kaggle/input/hm-project-code/Final_Project.py /kaggle/working/
+!cp /kaggle/input/hm-project-code/Final_Project_LGBM.py /kaggle/working/
+!cp /kaggle/input/hm-project-code/LGBM_Ablation_SHAP_Analysis.py /kaggle/working/
+
+%cd /kaggle/working
+
+!pip install -q lightgbm shap
+!python LGBM_Ablation_SHAP_Analysis.py
 ```
 
 该 notebook 会输出：

@@ -242,11 +242,12 @@
 2. 输入：`Final_Project.py`、`Final_Project_LGBM.py`、Kaggle H&M 官方数据集、当前 LightGBM 候选召回与特征构造逻辑。
 3. 动作：
 	- 新增 `LGBM_Ablation_SHAP_Analysis.ipynb`，用于在 Kaggle Notebook 中复用现有 LightGBM 数据集构造流程。
+	- 新增 `LGBM_Ablation_SHAP_Analysis.py`，作为同一分析的脚本版入口，避免通过 `nbconvert` 执行 notebook 时产生额外开销。
 	- 根据 LightGBM gain 排名选取 Top-5 特征，逐个移除后重新训练并计算验证窗口 MAP@12。
 	- 输出消融表 `outputs/lgbm_ablation_top5.csv`，包含 `baseline_map12`、`map12_after_removal`、`marginal_contribution` 与 `pseudo_important` 判断。
 	- 使用 `shap.TreeExplainer` 计算 SHAP 值，生成全局蜂群图 `outputs/shap_beeswarm.png` 与单样本瀑布图 `outputs/shap_waterfall_sample0.png`。
 	- 更新 `requirements.txt`，增加 `shap` 依赖；更新 `README.md`，补充分析 notebook 的运行入口与输出文件说明。
 4. 结果：
 	- 已完成 notebook JSON 结构校验：`python -m json.tool LGBM_Ablation_SHAP_Analysis.ipynb`。
-	- 已完成相关脚本语法校验：`python -m py_compile Final_Project.py Final_Project_LGBM.py`。
+	- 已完成相关脚本语法校验：`python -m py_compile Final_Project.py Final_Project_LGBM.py LGBM_Ablation_SHAP_Analysis.py`。
 	- 因完整数据集位于 Kaggle，消融数值、SHAP 图和最终解释需在 Kaggle Notebook 运行后生成。

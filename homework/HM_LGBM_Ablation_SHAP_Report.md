@@ -7,14 +7,6 @@
 1. 消融实验：按照 LightGBM gain 排名选取 Top-5 特征，逐个移除后重新训练模型，并记录 MAP@12 的变化。
 2. SHAP 分析：使用 `shap.TreeExplainer` 计算 SHAP 值，生成全局蜂群图和单样本瀑布图，解释模型学到的推荐规律。
 
-本报告使用的结果文件位于 `homework/` 目录：
-
-- `lgbm_ablation_top5.csv`
-- `lgbm_gain_importance.csv`
-- `shap_mean_abs_importance.csv`
-- `shap_beeswarm.png`
-- `shap_waterfall_sample0.png`
-
 ## 2. 消融实验
 
 ### 2.1 Top-5 特征选择
@@ -62,17 +54,12 @@ Baseline MAP@12 为 `0.028581`。
 | `user_avg_price` | 4 | 0.028581 | 0.028812 | -0.000231 | 是 |
 | `user_recency_days` | 5 | 0.028581 | 0.029147 | -0.000566 | 是 |
 | `candidate_rank` | 1 | 0.028581 | 0.029423 | -0.000843 | 是 |
-
 ### 2.4 消融结论
-
 从消融结果看，`source_baseline` 和 `candidate_score` 移除后 MAP@12 分别下降 `0.000419` 和 `0.000124`，说明它们对最终排序有正向贡献。
-
 但 `candidate_rank`、`user_avg_price`、`user_recency_days` 虽然位于 gain 排名前五，移除后 MAP@12 反而上升，因此在当前验证窗口下属于“Gain 排名高但实际贡献为零或负贡献”的伪重要特征。尤其是 `candidate_rank` 的 gain 排名第 1，但移除后 MAP@12 从 `0.028581` 提升到 `0.029423`，说明该特征可能让模型过度依赖规则召回顺序，抑制了 LightGBM 对商品热度、用户行为和交互特征的重新排序能力。
 
 ## 3. SHAP 分析
-
-### 3.1 全局解释：SHAP 蜂群图
-
+**SHAP 蜂群图**
 ![SHAP 蜂群图](shap_beeswarm.png)
 
 根据 `shap_mean_abs_importance.csv`，平均绝对 SHAP 值排名靠前的特征为：
@@ -98,7 +85,7 @@ SHAP 全局结果显示，模型最关注三类信号：
 
 这说明模型并不是单纯推荐全局热门商品，而是在 baseline 候选排序的基础上，进一步利用近期商品热度和用户历史交互强度进行重排。
 
-### 3.2 局部解释：SHAP 瀑布图
+**SHAP 瀑布图**
 
 ![SHAP 瀑布图](shap_waterfall_sample0.png)
 

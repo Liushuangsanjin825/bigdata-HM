@@ -235,3 +235,18 @@
 	- 新增增强版脚本：`Final_Project_LGBM.py`。
 	- 已完成本地语法校验：`python -m py_compile Final_Project.py Final_Project_Eval.py Final_Project_LGBM.py`。
 	- 由于完整数据集位于 Kaggle，本地未执行全量训练；完整验证与 `submission.csv` 生成需在 Kaggle Notebook 数据环境中运行。
+
+## 17. LightGBM 消融实验与 SHAP 分析补充（2026-04-29）
+
+1. 目标：围绕当前 LightGBM baseline 完成 Top-5 特征消融实验与 SHAP 全局/局部解释，满足模型分析与可解释性要求。
+2. 输入：`Final_Project.py`、`Final_Project_LGBM.py`、Kaggle H&M 官方数据集、当前 LightGBM 候选召回与特征构造逻辑。
+3. 动作：
+	- 新增 `LGBM_Ablation_SHAP_Analysis.ipynb`，用于在 Kaggle Notebook 中复用现有 LightGBM 数据集构造流程。
+	- 根据 LightGBM gain 排名选取 Top-5 特征，逐个移除后重新训练并计算验证窗口 MAP@12。
+	- 输出消融表 `outputs/lgbm_ablation_top5.csv`，包含 `baseline_map12`、`map12_after_removal`、`marginal_contribution` 与 `pseudo_important` 判断。
+	- 使用 `shap.TreeExplainer` 计算 SHAP 值，生成全局蜂群图 `outputs/shap_beeswarm.png` 与单样本瀑布图 `outputs/shap_waterfall_sample0.png`。
+	- 更新 `requirements.txt`，增加 `shap` 依赖；更新 `README.md`，补充分析 notebook 的运行入口与输出文件说明。
+4. 结果：
+	- 已完成 notebook JSON 结构校验：`python -m json.tool LGBM_Ablation_SHAP_Analysis.ipynb`。
+	- 已完成相关脚本语法校验：`python -m py_compile Final_Project.py Final_Project_LGBM.py`。
+	- 因完整数据集位于 Kaggle，消融数值、SHAP 图和最终解释需在 Kaggle Notebook 运行后生成。

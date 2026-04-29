@@ -62,6 +62,7 @@
 - `Final_Project.py`：第二阶段生成层脚本，仅负责输出 `outputs/submission.csv`
 - `Final_Project_Eval.py`：第二阶段评估层脚本，负责离线评估与权重调参
 - `Final_Project_LGBM.py`：增强版 LightGBM 排序/分类流水线，负责扩展候选、构造训练集、离线 MAP@12 验证并生成 `outputs/submission.csv`
+- `LGBM_Ablation_SHAP_Analysis.ipynb`：LightGBM baseline 的 Top-5 特征消融实验与 SHAP 可解释性分析 notebook
 - `Final_Project.ipynb`：第二阶段展示型 notebook（已对齐“生成层/评估层”拆分）
 - `doc_images/`：期中阶段关键图表
 - `task.md`：任务书要求映射与当前完成状态
@@ -113,6 +114,19 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 !cp outputs/submission.csv /kaggle/working/submission.csv
 ```
 
+完成消融实验与 SHAP 分析时，在 Kaggle 上打开并运行：
+
+```text
+LGBM_Ablation_SHAP_Analysis.ipynb
+```
+
+该 notebook 会输出：
+
+- `outputs/lgbm_ablation_top5.csv`
+- `outputs/shap_beeswarm.png`
+- `outputs/shap_waterfall_sample0.png`
+- `outputs/shap_mean_abs_importance.csv`
+
 5. 数据目录配置（推荐环境变量）：
    - 推荐设置环境变量 `HNM_DATA_PATH` 指向你本机的数据目录。
    - 也可直接在脚本内调整 `BASE_PATH`。
@@ -131,6 +145,7 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 - jupyter
 - pypdf
 - lightgbm
+- shap
 
 ## 7. 阶段状态
 

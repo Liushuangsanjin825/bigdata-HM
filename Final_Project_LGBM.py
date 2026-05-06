@@ -14,6 +14,7 @@ The original `Final_Project.py` remains the stable submission-only baseline.
 from __future__ import annotations
 
 import gc
+import os
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -52,14 +53,36 @@ except ImportError as exc:  # pragma: no cover - depends on runtime image.
     ) from exc
 
 
+def _env_int(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+    return int(raw_value)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 RANDOM_STATE = 610
-LABEL_WINDOW_DAYS = 7
-VALIDATION_CUSTOMER_CAP = 60000
-TRAIN_CUSTOMER_CAP = 80000
-NEGATIVE_SAMPLE_RATIO = 20
-MAX_CANDIDATES_PER_CUSTOMER = 80
+LABEL_WINDOW_DAYS = _env_int("LGBM_LABEL_WINDOW_DAYS", 7)
+VALIDATION_CUSTOMER_CAP = _env_int("LGBM_VALIDATION_CUSTOMER_CAP", 60000)
+TRAIN_CUSTOMER_CAP = _env_int("LGBM_TRAIN_CUSTOMER_CAP", 80000)
+NEGATIVE_SAMPLE_RATIO = _env_int("LGBM_NEGATIVE_SAMPLE_RATIO", 20)
+MAX_CANDIDATES_PER_CUSTOMER = _env_int("LGBM_MAX_CANDIDATES_PER_CUSTOMER", 80)
+BASELINE_RECALL_TOP = _env_int("LGBM_BASELINE_RECALL_TOP", min(80, MAX_CANDIDATES_PER_CUSTOMER))
 # Keep predictions unchanged while lowering per-chunk peak memory.
-SUBMISSION_CUSTOMER_CHUNK = 20000
+SUBMISSION_CUSTOMER_CHUNK = _env_int("LGBM_SUBMISSION_CUSTOMER_CHUNK", 20000)
+ATTRIBUTE_RECALL_TOP = _env_int("LGBM_ATTRIBUTE_RECALL_TOP", 12)
+RECENT_GLOBAL_RECALL_TOP = _env_int("LGBM_RECENT_GLOBAL_RECALL_TOP", 18)
+LGBM_N_ESTIMATORS = _env_int("LGBM_N_ESTIMATORS", 450)
+ENABLE_COLOUR_RECALL = _env_bool("LGBM_ENABLE_COLOUR_RECALL", False)
+ENABLE_SECTION_RECALL = _env_bool("LGBM_ENABLE_SECTION_RECALL", False)
+DROP_NOISY_FEATURES = _env_bool("LGBM_DROP_NOISY_FEATURES", False)
+FEATURE_EXPERIMENT = os.getenv("LGBM_FEATURE_EXPERIMENT", "all").strip().lower()
 
 AGE_BIN_TO_ID = {
     "u18": 0,
@@ -75,6 +98,11 @@ FEATURE_COLUMNS = [
     "candidate_rank",
     "candidate_score",
     "source_baseline",
+    "source_product_type",
+    "source_garment_group",
+    "source_colour",
+    "source_section",
+    "source_recent_global",
     "user_txn_all",
     "user_txn_30d",
     "user_unique_items",
@@ -91,8 +119,11 @@ FEATURE_COLUMNS = [
     "item_buyers_all",
     "item_recency_days",
     "item_avg_price",
+    "item_pop_ratio_7d_30d",
+    "item_pop_ratio_30d_all",
     "ua_cnt",
     "ua_recency_days",
+    "price_diff_user_item",
     "same_department_as_pref",
     "article_department_no",
     "article_product_type_no",
@@ -102,6 +133,45 @@ FEATURE_COLUMNS = [
     "article_section_no",
     "article_garment_group_no",
 ]
+
+NOISY_FEATURE_COLUMNS = {"candidate_rank", "user_avg_price", "user_recency_days"}
+NEW_EXPERIMENT_FEATURE_COLUMNS = {
+    "item_pop_ratio_7d_30d",
+    "item_pop_ratio_30d_all",
+    "price_diff_user_item",
+}
+
+
+def _resolve_model_feature_columns() -> list[str]:
+    feature_columns = list(FEATURE_COLUMNS)
+    if DROP_NOISY_FEATURES:
+        feature_columns = [feature for feature in feature_columns if feature not in NOISY_FEATURE_COLUMNS]
+
+    experiment = FEATURE_EXPERIMENT
+    if experiment in {"", "all"}:
+        return feature_columns
+    if experiment == "base":
+        return [feature for feature in feature_columns if feature not in NEW_EXPERIMENT_FEATURE_COLUMNS]
+
+    prefix = "add_"
+    if experiment.startswith(prefix):
+        added_feature = experiment[len(prefix) :]
+        if added_feature not in NEW_EXPERIMENT_FEATURE_COLUMNS:
+            raise ValueError(
+                f"Unknown LGBM_FEATURE_EXPERIMENT={FEATURE_EXPERIMENT!r}. "
+                f"Expected base, all, or add_ + one of {sorted(NEW_EXPERIMENT_FEATURE_COLUMNS)}"
+            )
+        base_features = [feature for feature in feature_columns if feature not in NEW_EXPERIMENT_FEATURE_COLUMNS]
+        return base_features + [added_feature]
+
+    raise ValueError(
+        f"Unknown LGBM_FEATURE_EXPERIMENT={FEATURE_EXPERIMENT!r}. "
+        "Expected base, all, add_item_pop_ratio_7d_30d, "
+        "add_item_pop_ratio_30d_all, or add_price_diff_user_item."
+    )
+
+
+MODEL_FEATURE_COLUMNS = _resolve_model_feature_columns()
 
 
 @dataclass(frozen=True)
@@ -180,6 +250,113 @@ def _collect_actual_items(
     return customers, actual_map
 
 
+def _build_article_attribute_maps(article_features: pl.DataFrame) -> dict[str, dict[str, float]]:
+    maps: dict[str, dict[str, float]] = {}
+    for attr_col in [
+        "article_product_type_no",
+        "article_garment_group_no",
+        "article_colour_group_code",
+        "article_section_no",
+    ]:
+        maps[attr_col] = {
+            row["article_id"]: float(row[attr_col])
+            for row in article_features.select("article_id", attr_col).drop_nulls().iter_rows(named=True)
+        }
+    return maps
+
+
+def _build_customer_preferred_attribute(
+    history_tx: pl.DataFrame,
+    article_features: pl.DataFrame,
+    attr_col: str,
+) -> dict[str, float]:
+    pref_df = (
+        history_tx.join(article_features.select("article_id", attr_col), on="article_id", how="left")
+        .drop_nulls([attr_col])
+        .group_by(["customer_id", attr_col])
+        .agg(
+            pl.len().alias("txn_cnt"),
+            pl.max("t_dat").alias("last_date"),
+        )
+        .sort(["customer_id", "txn_cnt", "last_date"], descending=[False, True, True])
+        .group_by("customer_id")
+        .agg(pl.col(attr_col).first().alias(attr_col))
+    )
+    return {row["customer_id"]: float(row[attr_col]) for row in pref_df.iter_rows(named=True)}
+
+
+def _build_attribute_top_items(
+    history_tx: pl.DataFrame,
+    article_features: pl.DataFrame,
+    attr_col: str,
+    reference_date: date,
+    top_n: int = ATTRIBUTE_RECALL_TOP,
+) -> dict[float, list[str]]:
+    cutoff = reference_date - timedelta(days=30)
+    top_df = (
+        history_tx.filter(pl.col("t_dat") >= pl.lit(cutoff))
+        .join(article_features.select("article_id", attr_col), on="article_id", how="left")
+        .drop_nulls([attr_col])
+        .group_by([attr_col, "article_id"])
+        .agg(
+            pl.len().alias("pop_30d"),
+            pl.n_unique("customer_id").alias("buyers_30d"),
+        )
+        .sort([attr_col, "pop_30d", "buyers_30d", "article_id"], descending=[False, True, True, False])
+        .group_by(attr_col)
+        .agg(pl.col("article_id").head(top_n).alias("top_items"))
+    )
+    return {float(row[attr_col]): row["top_items"] or [] for row in top_df.iter_rows(named=True)}
+
+
+def _build_recent_global_items(
+    history_tx: pl.DataFrame,
+    reference_date: date,
+    top_n: int = RECENT_GLOBAL_RECALL_TOP,
+) -> list[str]:
+    cutoff = reference_date - timedelta(days=7)
+    return (
+        history_tx.filter(pl.col("t_dat") >= pl.lit(cutoff))
+        .group_by("article_id")
+        .agg(
+            pl.len().alias("pop_7d"),
+            pl.n_unique("customer_id").alias("buyers_7d"),
+        )
+        .sort(["pop_7d", "buyers_7d", "article_id"], descending=[True, True, False])
+        .select(pl.col("article_id").head(top_n))
+        .get_column("article_id")
+        .to_list()
+    )
+
+
+def build_recall_context(
+    history_tx: pl.DataFrame,
+    article_features: pl.DataFrame,
+    reference_date: date,
+) -> dict[str, Any]:
+    attr_cols = {
+        "product_type": "article_product_type_no",
+        "garment_group": "article_garment_group_no",
+    }
+    if ENABLE_COLOUR_RECALL:
+        attr_cols["colour"] = "article_colour_group_code"
+    if ENABLE_SECTION_RECALL:
+        attr_cols["section"] = "article_section_no"
+    preferred_attributes = {
+        name: _build_customer_preferred_attribute(history_tx, article_features, attr_col)
+        for name, attr_col in attr_cols.items()
+    }
+    attribute_top_items = {
+        name: _build_attribute_top_items(history_tx, article_features, attr_col, reference_date)
+        for name, attr_col in attr_cols.items()
+    }
+    return {
+        "preferred_attributes": preferred_attributes,
+        "attribute_top_items": attribute_top_items,
+        "recent_global_items": _build_recent_global_items(history_tx, reference_date),
+    }
+
+
 def build_candidate_frame(
     customer_ids: list[str],
     artifacts: Any,
@@ -187,48 +364,137 @@ def build_candidate_frame(
     max_candidates: int = MAX_CANDIDATES_PER_CUSTOMER,
     actual_items_by_customer: dict[str, list[str]] | None = None,
     include_actual_items: bool = False,
+    recall_context: dict[str, Any] | None = None,
 ) -> pl.DataFrame:
+    baseline_recall_k = min(max_candidates, max(BASELINE_RECALL_TOP, MAX_K))
     baseline_lists = predict_lists_for_customers(
         customer_ids=customer_ids,
         artifacts=artifacts,
         ranker_config=ranker_config,
-        k=max_candidates,
+        k=baseline_recall_k,
     )
 
     rows: list[dict[str, Any]] = []
     actual_items_by_customer = actual_items_by_customer or {}
+    recall_context = recall_context or {}
+    preferred_attributes: dict[str, dict[str, float]] = recall_context.get("preferred_attributes", {})
+    attribute_top_items: dict[str, dict[float, list[str]]] = recall_context.get("attribute_top_items", {})
+    recent_global_items: list[str] = recall_context.get("recent_global_items", [])
+
+    def add_candidate(
+        customer_rows: list[dict[str, Any]],
+        seen: set[str],
+        customer_id: str,
+        article_id: str,
+        rank: int,
+        score: float,
+        source_col: str,
+    ) -> None:
+        if article_id in seen:
+            for row in reversed(customer_rows):
+                if row["article_id"] == article_id:
+                    row[source_col] = 1.0
+                    row["candidate_score"] = max(float(row["candidate_score"]), score)
+                    row["candidate_rank"] = min(int(row["candidate_rank"]), rank)
+                    return
+        customer_rows.append(
+            {
+                "customer_id": customer_id,
+                "article_id": article_id,
+                "candidate_rank": rank,
+                "candidate_score": score,
+                "source_baseline": 0.0,
+                "source_product_type": 0.0,
+                "source_garment_group": 0.0,
+                "source_colour": 0.0,
+                "source_section": 0.0,
+                "source_recent_global": 0.0,
+                "source_actual_in_train": 0.0,
+                source_col: 1.0,
+            }
+        )
+        seen.add(article_id)
+
     for customer_id, baseline_items in zip(customer_ids, baseline_lists):
         seen: set[str] = set()
+        customer_rows: list[dict[str, Any]] = []
         for rank, article_id in enumerate(baseline_items, start=1):
-            if article_id in seen:
-                continue
-            rows.append(
-                {
-                    "customer_id": customer_id,
-                    "article_id": article_id,
-                    "candidate_rank": rank,
-                    "candidate_score": 1.0 / rank,
-                    "source_baseline": 1.0,
-                    "source_actual_in_train": 0.0,
-                }
+            add_candidate(
+                customer_rows,
+                seen,
+                customer_id,
+                article_id,
+                rank,
+                1.0 / rank,
+                "source_baseline",
             )
-            seen.add(article_id)
+
+        next_rank = len(customer_rows) + 1
+        for source_name, source_col in [
+            ("product_type", "source_product_type"),
+            ("garment_group", "source_garment_group"),
+            ("colour", "source_colour"),
+            ("section", "source_section"),
+        ]:
+            if source_name == "colour" and not ENABLE_COLOUR_RECALL:
+                continue
+            if source_name == "section" and not ENABLE_SECTION_RECALL:
+                continue
+            pref_value = preferred_attributes.get(source_name, {}).get(customer_id)
+            if pref_value is None:
+                continue
+            for article_id in attribute_top_items.get(source_name, {}).get(pref_value, []):
+                add_candidate(
+                    customer_rows,
+                    seen,
+                    customer_id,
+                    article_id,
+                    next_rank,
+                    0.15 / max(next_rank, 1),
+                    source_col,
+                )
+                next_rank += 1
+                if len(customer_rows) >= max_candidates:
+                    break
+            if len(customer_rows) >= max_candidates:
+                break
+
+        if len(customer_rows) < max_candidates:
+            for article_id in recent_global_items:
+                add_candidate(
+                    customer_rows,
+                    seen,
+                    customer_id,
+                    article_id,
+                    next_rank,
+                    0.08 / max(next_rank, 1),
+                    "source_recent_global",
+                )
+                next_rank += 1
+                if len(customer_rows) >= max_candidates:
+                    break
 
         if include_actual_items:
             for article_id in actual_items_by_customer.get(customer_id, []):
                 if article_id in seen:
                     continue
-                rows.append(
+                customer_rows.append(
                     {
                         "customer_id": customer_id,
                         "article_id": article_id,
                         "candidate_rank": max_candidates + 1,
                         "candidate_score": 0.0,
                         "source_baseline": 0.0,
+                        "source_product_type": 0.0,
+                        "source_garment_group": 0.0,
+                        "source_colour": 0.0,
+                        "source_section": 0.0,
+                        "source_recent_global": 0.0,
                         "source_actual_in_train": 1.0,
                     }
                 )
                 seen.add(article_id)
+        rows.extend(customer_rows[:max_candidates] if not include_actual_items else customer_rows)
 
     if not rows:
         return pl.DataFrame(
@@ -238,6 +504,11 @@ def build_candidate_frame(
                 "candidate_rank": [],
                 "candidate_score": [],
                 "source_baseline": [],
+                "source_product_type": [],
+                "source_garment_group": [],
+                "source_colour": [],
+                "source_section": [],
+                "source_recent_global": [],
                 "source_actual_in_train": [],
             }
         )
@@ -381,6 +652,17 @@ def build_feature_frame(
         .join(article_features, on="article_id", how="left")
         .with_columns(
             (
+                pl.col("item_pop_7d").fill_null(0.0)
+                / (pl.col("item_pop_30d").fill_null(0.0) + 1.0)
+            ).alias("item_pop_ratio_7d_30d"),
+            (
+                pl.col("item_pop_30d").fill_null(0.0)
+                / (pl.col("item_pop_all").fill_null(0.0) + 1.0)
+            ).alias("item_pop_ratio_30d_all"),
+            (pl.col("user_avg_price").fill_null(0.0) - pl.col("item_avg_price").fill_null(0.0))
+            .abs()
+            .alias("price_diff_user_item"),
+            (
                 pl.col("user_pref_department").fill_null(-1)
                 == pl.col("article_department_no").fill_null(-2)
             )
@@ -426,7 +708,7 @@ def downsample_training_rows(train_df: pl.DataFrame) -> pl.DataFrame:
 
 
 def make_training_matrix(train_df: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    x = train_df.select(FEATURE_COLUMNS).to_numpy()
+    x = train_df.select(MODEL_FEATURE_COLUMNS).to_numpy()
     y = train_df.get_column("label").to_numpy()
     return x, y
 
@@ -441,7 +723,7 @@ def train_lgbm_model(train_df: pl.DataFrame) -> Any:
     model = lgb.LGBMClassifier(
         objective="binary",
         boosting_type="gbdt",
-        n_estimators=450,
+        n_estimators=LGBM_N_ESTIMATORS,
         learning_rate=0.045,
         num_leaves=96,
         max_depth=-1,
@@ -458,7 +740,7 @@ def train_lgbm_model(train_df: pl.DataFrame) -> Any:
     model.fit(
         x_train,
         y_train,
-        feature_name=FEATURE_COLUMNS,
+        feature_name=MODEL_FEATURE_COLUMNS,
         callbacks=[lgb.log_evaluation(period=50)],
     )
     print(f"LightGBM trained: rows={len(y_train)} positives={int(positive_count)}")
@@ -468,7 +750,7 @@ def train_lgbm_model(train_df: pl.DataFrame) -> Any:
 def score_feature_frame(model: Any, feature_df: pl.DataFrame) -> pl.DataFrame:
     if feature_df.is_empty():
         return feature_df.with_columns(pl.lit(0.0).alias("score"))
-    scores = model.predict_proba(feature_df.select(FEATURE_COLUMNS).to_numpy())[:, 1]
+    scores = model.predict_proba(feature_df.select(MODEL_FEATURE_COLUMNS).to_numpy())[:, 1]
     return feature_df.with_columns(pl.Series("score", scores))
 
 
@@ -503,6 +785,11 @@ def build_labeled_window_dataset(
         article_department=article_department,
         customer_age_bin=customer_age_bin,
     )
+    recall_context = build_recall_context(
+        history_tx=history_tx,
+        article_features=article_features,
+        reference_date=window.history_end,
+    )
     candidates = build_candidate_frame(
         customer_ids=customers,
         artifacts=artifacts,
@@ -510,6 +797,7 @@ def build_labeled_window_dataset(
         max_candidates=MAX_CANDIDATES_PER_CUSTOMER,
         actual_items_by_customer=actual_map,
         include_actual_items=True,
+        recall_context=recall_context,
     )
     labeled = label_candidates(candidates, actual_map)
     features = build_feature_frame(
@@ -548,11 +836,17 @@ def run_single_window_validation(
         article_department=article_department,
         customer_age_bin=customer_age_bin,
     )
+    recall_context = build_recall_context(
+        history_tx=history_tx,
+        article_features=article_features,
+        reference_date=window.history_end,
+    )
     candidates = build_candidate_frame(
         customer_ids=customers,
         artifacts=artifacts,
         ranker_config=ranker_config,
         max_candidates=MAX_CANDIDATES_PER_CUSTOMER,
+        recall_context=recall_context,
     )
     features = build_feature_frame(
         candidates=candidates,
@@ -618,7 +912,12 @@ def save_feature_importance(model: Any, output_dir: Path = OUTPUT_DIR) -> None:
     importance_df = pl.DataFrame(
         {
             "feature": FEATURE_COLUMNS,
-            "importance": model.feature_importances_.tolist(),
+            "importance": [
+                float(model.feature_importances_[MODEL_FEATURE_COLUMNS.index(feature)])
+                if feature in MODEL_FEATURE_COLUMNS
+                else 0.0
+                for feature in FEATURE_COLUMNS
+            ],
         }
     ).sort("importance", descending=True)
     path = output_dir / "lgbm_feature_importance.csv"
@@ -649,6 +948,11 @@ def generate_lgbm_submission(
         customer_age_bin=customer_age_bin,
     )
     reference_date = transactions.get_column("t_dat").max()
+    recall_context = build_recall_context(
+        history_tx=transactions,
+        article_features=article_features,
+        reference_date=reference_date,
+    )
 
     all_rows: list[dict[str, str]] = []
     total = len(customer_ids)
@@ -660,6 +964,7 @@ def generate_lgbm_submission(
             artifacts=artifacts,
             ranker_config=ranker_config,
             max_candidates=MAX_CANDIDATES_PER_CUSTOMER,
+            recall_context=recall_context,
         )
         features = build_feature_frame(
             candidates=candidates,
@@ -704,6 +1009,16 @@ def generate_lgbm_submission(
 
 def run_lgbm_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
     base_path = resolve_base_path(base_path)
+    print(
+        "LGBM params: "
+        f"train_cap={TRAIN_CUSTOMER_CAP}, valid_cap={VALIDATION_CUSTOMER_CAP}, "
+        f"max_candidates={MAX_CANDIDATES_PER_CUSTOMER}, baseline_recall_top={BASELINE_RECALL_TOP}, "
+        f"attribute_top={ATTRIBUTE_RECALL_TOP}, recent_global_top={RECENT_GLOBAL_RECALL_TOP}, "
+        f"n_estimators={LGBM_N_ESTIMATORS}, "
+        f"colour_recall={ENABLE_COLOUR_RECALL}, section_recall={ENABLE_SECTION_RECALL}, "
+        f"drop_noisy_features={DROP_NOISY_FEATURES}, feature_experiment={FEATURE_EXPERIMENT}"
+    )
+    print(f"model feature count: {len(MODEL_FEATURE_COLUMNS)} / raw feature count: {len(FEATURE_COLUMNS)}")
     tables = load_tables(base_path)
     summary = summarize_inputs(tables)
     transactions = prepare_transactions(tables["transactions"])

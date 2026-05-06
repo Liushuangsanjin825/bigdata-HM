@@ -5,6 +5,9 @@
 __pycache__/
 *.pyc
 
+# Kaggle raw data
+data/
+
 # 环境
 .env
 .venv

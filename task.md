@@ -258,3 +258,48 @@
 	- 已完成相关脚本语法校验：`python -m py_compile Final_Project.py Final_Project_LGBM.py LGBM_Ablation_SHAP_Analysis.py`。
 	- 已在仓库 `homework/` 归档消融与解释产物：`HM_LGBM_Ablation_SHAP_Report.md`、`HM_LGBM_Ablation_SHAP_Report.pdf`、`lgbm_ablation_top5.csv`、`lgbm_gain_importance.csv`、`shap_mean_abs_importance.csv`、`shap_beeswarm.png`、`shap_waterfall_sample0.png`。
 	- 后续若需复现实验过程，可在 Kaggle Notebook 环境按相同脚本重新执行并比对上述归档结果。
+
+## 18. LightGBM 候选召回增强（2026-05-05）
+
+1. 目标：继续优化 LightGBM baseline，以提高 H&M 推荐提交分数，优先提升候选集覆盖率。
+2. 输入：`Final_Project_LGBM.py`、当前规则候选召回、LightGBM 特征构造流程、已有消融/SHAP 结果。
+3. 动作：
+	- 在 `Final_Project_LGBM.py` 中新增属性偏好召回：按用户历史偏好的 `product_type`、`garment_group`、`colour`、`section` 召回对应属性下近 30 天热门商品。
+	- 新增近 7 天全局热门兜底召回，增强冷启动和短期趋势覆盖。
+	- 为新增候选来源加入特征标记：`source_product_type`、`source_garment_group`、`source_colour`、`source_section`、`source_recent_global`。
+	- 新增排序特征：`item_pop_ratio_7d_30d`、`item_pop_ratio_30d_all`、`price_diff_user_item`，帮助模型识别趋势增长和用户价格匹配程度。
+	- 将候选数、训练客户数、验证客户数、树数量等参数改为环境变量可配置，便于 Kaggle 快速试跑和放大训练。
+	- 更新 `README.md`，补充 Kaggle 环境变量调参示例。
+4. 结果：
+	- 已完成语法校验：`python -m py_compile Final_Project_LGBM.py LGBM_Ablation_SHAP_Analysis.py`。
+	- 完整 MAP@12 提升效果需在 Kaggle 数据环境运行 `Final_Project_LGBM.py` 后，以 `outputs/lgbm_validation_metrics.csv` 和 Kaggle 提交分数验证。
+
+## 19. LightGBM 稳健候选追加与去噪开关（2026-05-06）
+
+1. 目标：修复上一轮“新增属性候选挤掉 baseline 强候选”导致 Public/Private 泛化不稳定的问题，继续提高线上分数。
+2. 输入：`Final_Project_LGBM.py`、Kaggle 提交对比结果、消融实验中识别出的负贡献特征。
+3. 动作：
+	- 将候选策略调整为默认保留 baseline 前 `LGBM_BASELINE_RECALL_TOP` 个候选，再追加属性/趋势召回，避免新增候选替换原强候选。
+	- 新增环境变量 `LGBM_BASELINE_RECALL_TOP`，推荐冲分时设置为 `80`，并将 `LGBM_MAX_CANDIDATES_PER_CUSTOMER` 提高到 `100` 进行追加召回。
+	- 将 `colour` 和 `section` 属性召回改为默认关闭，可通过 `LGBM_ENABLE_COLOUR_RECALL`、`LGBM_ENABLE_SECTION_RECALL` 做 A/B 实验。
+	- 新增 `LGBM_DROP_NOISY_FEATURES` 开关，可一键剔除消融实验中表现为负贡献的 `candidate_rank`、`user_avg_price`、`user_recency_days`。
+	- 增加运行时参数打印，便于在 Kaggle 日志中核对当前实际配置。
+	- 更新 `README.md`，补充稳健冲分配置与去噪对比配置。
+4. 结果：
+	- 已完成语法校验：`python -m py_compile Final_Project_LGBM.py LGBM_Ablation_SHAP_Analysis.py`。
+	- 完整效果需在 Kaggle 分别提交默认稳健版与去噪版，对比 Public/Private 分数后保留最优版本。
+
+## 20. 新特征单变量消融开关（2026-05-06）
+
+1. 目标：支持期末小任务中“一次只加一个变量”的标准消融实验，便于比较 3 个新特征的 Local CV MAP@12 贡献。
+2. 输入：`Final_Project_LGBM.py`、新增特征 `item_pop_ratio_7d_30d`、`item_pop_ratio_30d_all`、`price_diff_user_item`。
+3. 动作：
+	- 新增环境变量 `LGBM_FEATURE_EXPERIMENT`。
+	- 支持 `base`：剔除 3 个新特征，作为消融基础模型。
+	- 支持 `add_item_pop_ratio_7d_30d`、`add_item_pop_ratio_30d_all`、`add_price_diff_user_item`：在基础模型上一次只加入一个新特征。
+	- 支持默认 `all`：使用完整特征集。
+	- 在运行日志中打印 `feature_experiment`，便于保存实验截图和写报告。
+	- 更新 `README.md`，补充 4 组 Kaggle 环境变量运行方式。
+4. 结果：
+	- 已完成语法校验：`python -m py_compile Final_Project_LGBM.py LGBM_Ablation_SHAP_Analysis.py`。
+	- 后续在 Kaggle 上依次运行 4 组实验，记录 `LGBM validation ... MAP@12=...`，即可生成报告中的消融表。

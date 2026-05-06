@@ -118,6 +118,54 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 !cp outputs/submission.csv /kaggle/working/submission.csv
 ```
 
+若要快速试跑或控制 Kaggle 运行时间，可在运行前设置环境变量：
+
+```python
+%env LGBM_TRAIN_CUSTOMER_CAP=40000
+%env LGBM_VALIDATION_CUSTOMER_CAP=30000
+%env LGBM_MAX_CANDIDATES_PER_CUSTOMER=60
+%env LGBM_N_ESTIMATORS=260
+```
+
+冲分时建议先使用“保留 baseline 强候选 + 追加稳健召回”的配置：
+
+```python
+%env LGBM_TRAIN_CUSTOMER_CAP=80000
+%env LGBM_VALIDATION_CUSTOMER_CAP=60000
+%env LGBM_BASELINE_RECALL_TOP=80
+%env LGBM_MAX_CANDIDATES_PER_CUSTOMER=100
+%env LGBM_N_ESTIMATORS=450
+%env LGBM_ENABLE_COLOUR_RECALL=0
+%env LGBM_ENABLE_SECTION_RECALL=0
+%env LGBM_DROP_NOISY_FEATURES=0
+```
+
+若验证发现 `candidate_rank/user_avg_price/user_recency_days` 仍有负贡献，可对比去噪版本：
+
+```python
+%env LGBM_DROP_NOISY_FEATURES=1
+```
+
+做“一次只加一个变量”的新特征消融时，固定其它参数，只切换：
+
+```python
+%env LGBM_FEATURE_EXPERIMENT=base
+```
+
+```python
+%env LGBM_FEATURE_EXPERIMENT=add_item_pop_ratio_7d_30d
+```
+
+```python
+%env LGBM_FEATURE_EXPERIMENT=add_item_pop_ratio_30d_all
+```
+
+```python
+%env LGBM_FEATURE_EXPERIMENT=add_price_diff_user_item
+```
+
+每次运行 `python Final_Project_LGBM.py` 后记录日志中的 `LGBM validation ... MAP@12=...`。
+
 完成消融实验与 SHAP 分析时，在 Kaggle 上打开并运行：
 
 ```text

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import gc
 import os
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -72,7 +73,7 @@ LABEL_WINDOW_DAYS = _env_int("LGBM_LABEL_WINDOW_DAYS", 7)
 VALIDATION_CUSTOMER_CAP = _env_int("LGBM_VALIDATION_CUSTOMER_CAP", 60000)
 TRAIN_CUSTOMER_CAP = _env_int("LGBM_TRAIN_CUSTOMER_CAP", 80000)
 NEGATIVE_SAMPLE_RATIO = _env_int("LGBM_NEGATIVE_SAMPLE_RATIO", 20)
-MAX_CANDIDATES_PER_CUSTOMER = _env_int("LGBM_MAX_CANDIDATES_PER_CUSTOMER", 80)
+MAX_CANDIDATES_PER_CUSTOMER = _env_int("LGBM_MAX_CANDIDATES_PER_CUSTOMER", 100)
 BASELINE_RECALL_TOP = _env_int("LGBM_BASELINE_RECALL_TOP", min(80, MAX_CANDIDATES_PER_CUSTOMER))
 # Keep predictions unchanged while lowering per-chunk peak memory.
 SUBMISSION_CUSTOMER_CHUNK = _env_int("LGBM_SUBMISSION_CUSTOMER_CHUNK", 20000)
@@ -81,8 +82,23 @@ RECENT_GLOBAL_RECALL_TOP = _env_int("LGBM_RECENT_GLOBAL_RECALL_TOP", 18)
 LGBM_N_ESTIMATORS = _env_int("LGBM_N_ESTIMATORS", 450)
 ENABLE_COLOUR_RECALL = _env_bool("LGBM_ENABLE_COLOUR_RECALL", False)
 ENABLE_SECTION_RECALL = _env_bool("LGBM_ENABLE_SECTION_RECALL", False)
+ENABLE_COOCCURRENCE_RECALL = _env_bool("LGBM_ENABLE_COOCCURRENCE_RECALL", True)
+COOCCURRENCE_DAYS = _env_int("LGBM_COOCCURRENCE_DAYS", 30)
+COOCCURRENCE_TOP_PER_ITEM = _env_int("LGBM_COOCCURRENCE_TOP_PER_ITEM", 16)
+COOCCURRENCE_HISTORY_TOP = _env_int("LGBM_COOCCURRENCE_HISTORY_TOP", 4)
+COOCCURRENCE_RECALL_TOP = _env_int("LGBM_COOCCURRENCE_RECALL_TOP", 12)
+COOCCURRENCE_MAX_BASKET_SIZE = _env_int("LGBM_COOCCURRENCE_MAX_BASKET_SIZE", 20)
+ENABLE_COLD_START_RECALL = _env_bool("LGBM_ENABLE_COLD_START_RECALL", True)
+COLD_START_HISTORY_MAX_ITEMS = _env_int("LGBM_COLD_START_HISTORY_MAX_ITEMS", 2)
+COLD_START_DAYS = _env_int("LGBM_COLD_START_DAYS", 30)
+COLD_START_RECALL_TOP = _env_int("LGBM_COLD_START_RECALL_TOP", 18)
+COLD_START_SEGMENT_TOP = _env_int("LGBM_COLD_START_SEGMENT_TOP", 32)
+COLD_START_MIN_SEGMENT_BUYERS = _env_int("LGBM_COLD_START_MIN_SEGMENT_BUYERS", 3)
+ENABLE_POSTAL_COLD_START_RECALL = _env_bool("LGBM_ENABLE_POSTAL_COLD_START_RECALL", False)
+POSTAL_COLD_START_MIN_BUYERS = _env_int("LGBM_POSTAL_COLD_START_MIN_BUYERS", 8)
+TRAIN_WINDOW_COUNT = _env_int("LGBM_TRAIN_WINDOW_COUNT", 1)
 DROP_NOISY_FEATURES = _env_bool("LGBM_DROP_NOISY_FEATURES", False)
-FEATURE_EXPERIMENT = os.getenv("LGBM_FEATURE_EXPERIMENT", "all").strip().lower()
+FEATURE_EXPERIMENT = os.getenv("LGBM_FEATURE_EXPERIMENT", "best").strip().lower()
 
 AGE_BIN_TO_ID = {
     "u18": 0,
@@ -103,6 +119,10 @@ FEATURE_COLUMNS = [
     "source_colour",
     "source_section",
     "source_recent_global",
+    "source_cooccurrence",
+    "cooccurrence_score",
+    "source_cold_start",
+    "cold_start_score",
     "user_txn_all",
     "user_txn_30d",
     "user_unique_items",
@@ -150,6 +170,8 @@ def _resolve_model_feature_columns() -> list[str]:
     experiment = FEATURE_EXPERIMENT
     if experiment in {"", "all"}:
         return feature_columns
+    if experiment == "best":
+        return [feature for feature in feature_columns if feature != "price_diff_user_item"]
     if experiment == "base":
         return [feature for feature in feature_columns if feature not in NEW_EXPERIMENT_FEATURE_COLUMNS]
 
@@ -166,7 +188,7 @@ def _resolve_model_feature_columns() -> list[str]:
 
     raise ValueError(
         f"Unknown LGBM_FEATURE_EXPERIMENT={FEATURE_EXPERIMENT!r}. "
-        "Expected base, all, add_item_pop_ratio_7d_30d, "
+        "Expected best, base, all, add_item_pop_ratio_7d_30d, "
         "add_item_pop_ratio_30d_all, or add_price_diff_user_item."
     )
 
@@ -216,6 +238,73 @@ def prepare_article_model_features(articles_lf: pl.LazyFrame) -> pl.DataFrame:
             pl.col("garment_group_no").cast(pl.Float64, strict=False).alias("article_garment_group_no"),
         )
         .unique(subset=["article_id"], keep="first")
+        .collect(engine="streaming")
+    )
+
+
+def _age_bin_expr(age_expr: pl.Expr) -> pl.Expr:
+    return (
+        pl.when(age_expr < 18)
+        .then(pl.lit("u18"))
+        .when(age_expr < 25)
+        .then(pl.lit("18_24"))
+        .when(age_expr < 35)
+        .then(pl.lit("25_34"))
+        .when(age_expr < 45)
+        .then(pl.lit("35_44"))
+        .when(age_expr < 55)
+        .then(pl.lit("45_54"))
+        .when(age_expr < 65)
+        .then(pl.lit("55_64"))
+        .otherwise(pl.lit("65_plus"))
+    )
+
+
+def _normalized_text_expr(column_name: str, fallback: str = "unknown") -> pl.Expr:
+    return (
+        pl.col(column_name)
+        .cast(pl.Utf8, strict=False)
+        .str.strip_chars()
+        .str.to_lowercase()
+        .replace({"": fallback, "none": "none", "nan": fallback, "null": fallback})
+        .fill_null(fallback)
+    )
+
+
+def prepare_customer_model_features(customers_lf: pl.LazyFrame) -> pl.DataFrame:
+    age_median = (
+        customers_lf.select(pl.col("age").cast(pl.Float64, strict=False).drop_nulls().median().alias("age_median"))
+        .collect(engine="streaming")
+        .get_column("age_median")[0]
+    )
+    return (
+        customers_lf.select(
+            pl.col("customer_id").cast(pl.Utf8),
+            pl.col("age").cast(pl.Float64, strict=False).fill_null(age_median).alias("age_filled"),
+            _normalized_text_expr("club_member_status").alias("club_member_status_norm"),
+            _normalized_text_expr("fashion_news_frequency").alias("fashion_news_frequency_norm"),
+            _normalized_text_expr("postal_code").alias("postal_code_norm"),
+        )
+        .with_columns(_age_bin_expr(pl.col("age_filled")).alias("cold_age_bin"))
+        .with_columns(
+            pl.concat_str(
+                ["cold_age_bin", "club_member_status_norm", "fashion_news_frequency_norm"],
+                separator="|",
+            ).alias("cold_profile_key"),
+            pl.concat_str(
+                ["club_member_status_norm", "fashion_news_frequency_norm"],
+                separator="|",
+            ).alias("cold_club_news_key"),
+        )
+        .select(
+            "customer_id",
+            "cold_age_bin",
+            "club_member_status_norm",
+            "fashion_news_frequency_norm",
+            "cold_profile_key",
+            "cold_club_news_key",
+            "postal_code_norm",
+        )
         .collect(engine="streaming")
     )
 
@@ -329,9 +418,162 @@ def _build_recent_global_items(
     )
 
 
+def _build_cooccurrence_items(
+    history_tx: pl.DataFrame,
+    reference_date: date,
+) -> dict[str, list[tuple[str, float]]]:
+    if not ENABLE_COOCCURRENCE_RECALL or COOCCURRENCE_RECALL_TOP <= 0:
+        return {}
+
+    cutoff = reference_date - timedelta(days=COOCCURRENCE_DAYS)
+    baskets = (
+        history_tx.filter(pl.col("t_dat") >= pl.lit(cutoff))
+        .group_by(["customer_id", "t_dat"])
+        .agg(pl.col("article_id").unique(maintain_order=True).alias("items"))
+        .with_columns(pl.col("items").list.len().alias("basket_size"))
+        .filter((pl.col("basket_size") > 1) & (pl.col("basket_size") <= COOCCURRENCE_MAX_BASKET_SIZE))
+        .select("items")
+    )
+
+    pair_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for items in baskets.get_column("items").to_list():
+        basket_items = [str(item) for item in items if item is not None]
+        for item in basket_items:
+            counter = pair_counts[item]
+            for other_item in basket_items:
+                if other_item != item:
+                    counter[other_item] += 1
+
+    cooccurrence_items: dict[str, list[tuple[str, float]]] = {}
+    for item, counter in pair_counts.items():
+        cooccurrence_items[item] = [
+            (other_item, float(count))
+            for other_item, count in counter.most_common(COOCCURRENCE_TOP_PER_ITEM)
+        ]
+    print(
+        "cooccurrence recall built: "
+        f"items={len(cooccurrence_items)} days={COOCCURRENCE_DAYS} "
+        f"top_per_item={COOCCURRENCE_TOP_PER_ITEM}"
+    )
+    return cooccurrence_items
+
+
+def _build_customer_cold_start_segments(customer_features: pl.DataFrame) -> dict[str, tuple[str, str, str, str]]:
+    if not ENABLE_COLD_START_RECALL:
+        return {}
+    result: dict[str, tuple[str, str, str, str]] = {}
+    for row in customer_features.select(
+        "customer_id",
+        "cold_profile_key",
+        "cold_age_bin",
+        "cold_club_news_key",
+        "postal_code_norm",
+    ).iter_rows(named=True):
+        result[row["customer_id"]] = (
+            str(row["cold_profile_key"]),
+            str(row["cold_age_bin"]),
+            str(row["cold_club_news_key"]),
+            str(row["postal_code_norm"]),
+        )
+    return result
+
+
+def _build_segment_top_items(
+    history_tx: pl.DataFrame,
+    customer_features: pl.DataFrame,
+    segment_col: str,
+    reference_date: date,
+    top_n: int,
+    min_buyers: int,
+) -> dict[str, list[tuple[str, float]]]:
+    cutoff = reference_date - timedelta(days=COLD_START_DAYS)
+    top_df = (
+        history_tx.filter(pl.col("t_dat") >= pl.lit(cutoff))
+        .join(customer_features.select("customer_id", segment_col), on="customer_id", how="left")
+        .drop_nulls([segment_col])
+        .group_by([segment_col, "article_id"])
+        .agg(
+            pl.len().alias("pop_segment"),
+            pl.n_unique("customer_id").alias("buyers_segment"),
+        )
+        .filter(pl.col("buyers_segment") >= min_buyers)
+        .with_columns(
+            (pl.col("pop_segment").cast(pl.Float64) + pl.col("buyers_segment").cast(pl.Float64) * 0.5).alias(
+                "segment_score"
+            )
+        )
+        .sort([segment_col, "segment_score", "buyers_segment", "article_id"], descending=[False, True, True, False])
+        .group_by(segment_col)
+        .agg(
+            pl.struct("article_id", "segment_score")
+            .head(top_n)
+            .alias("segment_items")
+        )
+    )
+    result: dict[str, list[tuple[str, float]]] = {}
+    for row in top_df.iter_rows(named=True):
+        result[str(row[segment_col])] = [
+            (str(item["article_id"]), float(item["segment_score"]))
+            for item in (row["segment_items"] or [])
+        ]
+    return result
+
+
+def _build_cold_start_top_items(
+    history_tx: pl.DataFrame,
+    customer_features: pl.DataFrame,
+    reference_date: date,
+) -> dict[str, dict[str, list[tuple[str, float]]]]:
+    if not ENABLE_COLD_START_RECALL or COLD_START_RECALL_TOP <= 0:
+        return {}
+
+    segment_top_items = {
+        "cold_profile_key": _build_segment_top_items(
+            history_tx,
+            customer_features,
+            "cold_profile_key",
+            reference_date,
+            top_n=COLD_START_SEGMENT_TOP,
+            min_buyers=COLD_START_MIN_SEGMENT_BUYERS,
+        ),
+        "cold_age_bin": _build_segment_top_items(
+            history_tx,
+            customer_features,
+            "cold_age_bin",
+            reference_date,
+            top_n=COLD_START_SEGMENT_TOP,
+            min_buyers=COLD_START_MIN_SEGMENT_BUYERS,
+        ),
+        "cold_club_news_key": _build_segment_top_items(
+            history_tx,
+            customer_features,
+            "cold_club_news_key",
+            reference_date,
+            top_n=COLD_START_SEGMENT_TOP,
+            min_buyers=COLD_START_MIN_SEGMENT_BUYERS,
+        ),
+    }
+    if ENABLE_POSTAL_COLD_START_RECALL:
+        segment_top_items["postal_code_norm"] = _build_segment_top_items(
+            history_tx,
+            customer_features,
+            "postal_code_norm",
+            reference_date,
+            top_n=COLD_START_SEGMENT_TOP,
+            min_buyers=POSTAL_COLD_START_MIN_BUYERS,
+        )
+
+    print(
+        "cold-start recall built: "
+        + ", ".join(f"{name}={len(items)}" for name, items in segment_top_items.items())
+    )
+    return segment_top_items
+
+
 def build_recall_context(
     history_tx: pl.DataFrame,
     article_features: pl.DataFrame,
+    customer_features: pl.DataFrame,
     reference_date: date,
 ) -> dict[str, Any]:
     attr_cols = {
@@ -354,6 +596,9 @@ def build_recall_context(
         "preferred_attributes": preferred_attributes,
         "attribute_top_items": attribute_top_items,
         "recent_global_items": _build_recent_global_items(history_tx, reference_date),
+        "cooccurrence_items": _build_cooccurrence_items(history_tx, reference_date),
+        "customer_cold_segments": _build_customer_cold_start_segments(customer_features),
+        "cold_start_top_items": _build_cold_start_top_items(history_tx, customer_features, reference_date),
     }
 
 
@@ -380,6 +625,11 @@ def build_candidate_frame(
     preferred_attributes: dict[str, dict[str, float]] = recall_context.get("preferred_attributes", {})
     attribute_top_items: dict[str, dict[float, list[str]]] = recall_context.get("attribute_top_items", {})
     recent_global_items: list[str] = recall_context.get("recent_global_items", [])
+    cooccurrence_items: dict[str, list[tuple[str, float]]] = recall_context.get("cooccurrence_items", {})
+    customer_cold_segments: dict[str, tuple[str, str, str, str]] = recall_context.get("customer_cold_segments", {})
+    cold_start_top_items: dict[str, dict[str, list[tuple[str, float]]]] = recall_context.get(
+        "cold_start_top_items", {}
+    )
 
     def add_candidate(
         customer_rows: list[dict[str, Any]],
@@ -389,13 +639,17 @@ def build_candidate_frame(
         rank: int,
         score: float,
         source_col: str,
+        extra_values: dict[str, float] | None = None,
     ) -> None:
+        extra_values = extra_values or {}
         if article_id in seen:
             for row in reversed(customer_rows):
                 if row["article_id"] == article_id:
                     row[source_col] = 1.0
                     row["candidate_score"] = max(float(row["candidate_score"]), score)
                     row["candidate_rank"] = min(int(row["candidate_rank"]), rank)
+                    for key, value in extra_values.items():
+                        row[key] = max(float(row.get(key, 0.0)), float(value))
                     return
         customer_rows.append(
             {
@@ -409,8 +663,13 @@ def build_candidate_frame(
                 "source_colour": 0.0,
                 "source_section": 0.0,
                 "source_recent_global": 0.0,
+                "source_cooccurrence": 0.0,
+                "cooccurrence_score": 0.0,
+                "source_cold_start": 0.0,
+                "cold_start_score": 0.0,
                 "source_actual_in_train": 0.0,
                 source_col: 1.0,
+                **extra_values,
             }
         )
         seen.add(article_id)
@@ -430,6 +689,35 @@ def build_candidate_frame(
             )
 
         next_rank = len(customer_rows) + 1
+        if len(customer_rows) < max_candidates and cooccurrence_items:
+            co_scores: dict[str, float] = {}
+            for history_pos, history_item in enumerate(
+                artifacts.user_recent_history.get(customer_id, [])[:COOCCURRENCE_HISTORY_TOP],
+                start=1,
+            ):
+                for co_item, co_score in cooccurrence_items.get(history_item, []):
+                    if co_item in seen:
+                        continue
+                    co_scores[co_item] = co_scores.get(co_item, 0.0) + co_score / history_pos
+
+            for co_rank, (article_id, co_score) in enumerate(
+                sorted(co_scores.items(), key=lambda kv: (-kv[1], kv[0]))[:COOCCURRENCE_RECALL_TOP],
+                start=1,
+            ):
+                add_candidate(
+                    customer_rows,
+                    seen,
+                    customer_id,
+                    article_id,
+                    next_rank,
+                    0.12 / max(next_rank, 1),
+                    "source_cooccurrence",
+                    {"cooccurrence_score": co_score / co_rank},
+                )
+                next_rank += 1
+                if len(customer_rows) >= max_candidates:
+                    break
+
         for source_name, source_col in [
             ("product_type", "source_product_type"),
             ("garment_group", "source_garment_group"),
@@ -456,8 +744,56 @@ def build_candidate_frame(
                 next_rank += 1
                 if len(customer_rows) >= max_candidates:
                     break
-            if len(customer_rows) >= max_candidates:
-                break
+                if len(customer_rows) >= max_candidates:
+                    break
+
+        history_item_count = len(artifacts.user_recent_history.get(customer_id, [])) + len(
+            artifacts.user_long_history.get(customer_id, [])
+        )
+        if (
+            len(customer_rows) < max_candidates
+            and cold_start_top_items
+            and history_item_count <= COLD_START_HISTORY_MAX_ITEMS
+        ):
+            segment_values = customer_cold_segments.get(customer_id)
+            segment_plan: list[tuple[str, str, float]] = []
+            if segment_values is not None:
+                profile_key, age_bin, club_news_key, postal_code = segment_values
+                segment_plan.extend(
+                    [
+                        ("cold_profile_key", profile_key, 1.0),
+                        ("cold_age_bin", age_bin, 0.7),
+                        ("cold_club_news_key", club_news_key, 0.5),
+                    ]
+                )
+                if ENABLE_POSTAL_COLD_START_RECALL:
+                    segment_plan.append(("postal_code_norm", postal_code, 0.9))
+
+            cold_scores: dict[str, float] = {}
+            for segment_name, segment_value, segment_weight in segment_plan:
+                segment_items = cold_start_top_items.get(segment_name, {}).get(segment_value, [])
+                for pos, (article_id, segment_score) in enumerate(segment_items, start=1):
+                    cold_scores[article_id] = cold_scores.get(article_id, 0.0) + (
+                        segment_weight * np.log1p(segment_score) / pos
+                    )
+
+            for cold_rank, (article_id, cold_score) in enumerate(
+                sorted(cold_scores.items(), key=lambda kv: (-kv[1], kv[0]))[:COLD_START_RECALL_TOP],
+                start=1,
+            ):
+                add_candidate(
+                    customer_rows,
+                    seen,
+                    customer_id,
+                    article_id,
+                    next_rank,
+                    0.10 / max(next_rank, 1),
+                    "source_cold_start",
+                    {"cold_start_score": cold_score / cold_rank},
+                )
+                next_rank += 1
+                if len(customer_rows) >= max_candidates:
+                    break
 
         if len(customer_rows) < max_candidates:
             for article_id in recent_global_items:
@@ -490,6 +826,10 @@ def build_candidate_frame(
                         "source_colour": 0.0,
                         "source_section": 0.0,
                         "source_recent_global": 0.0,
+                        "source_cooccurrence": 0.0,
+                        "cooccurrence_score": 0.0,
+                        "source_cold_start": 0.0,
+                        "cold_start_score": 0.0,
                         "source_actual_in_train": 1.0,
                     }
                 )
@@ -509,6 +849,10 @@ def build_candidate_frame(
                 "source_colour": [],
                 "source_section": [],
                 "source_recent_global": [],
+                "source_cooccurrence": [],
+                "cooccurrence_score": [],
+                "source_cold_start": [],
+                "cold_start_score": [],
                 "source_actual_in_train": [],
             }
         )
@@ -770,6 +1114,7 @@ def build_labeled_window_dataset(
     transactions: pl.DataFrame,
     article_department: pl.DataFrame,
     article_features: pl.DataFrame,
+    customer_features: pl.DataFrame,
     customer_age_bin: dict[str, str],
     ranker_config: RankerConfig,
     window: WindowSpec,
@@ -788,6 +1133,7 @@ def build_labeled_window_dataset(
     recall_context = build_recall_context(
         history_tx=history_tx,
         article_features=article_features,
+        customer_features=customer_features,
         reference_date=window.history_end,
     )
     candidates = build_candidate_frame(
@@ -816,11 +1162,62 @@ def build_labeled_window_dataset(
     return features
 
 
+def build_labeled_windows_dataset(
+    transactions: pl.DataFrame,
+    article_department: pl.DataFrame,
+    article_features: pl.DataFrame,
+    customer_features: pl.DataFrame,
+    customer_age_bin: dict[str, str],
+    ranker_config: RankerConfig,
+    windows: list[WindowSpec],
+    customer_cap: int,
+) -> pl.DataFrame:
+    if not windows:
+        return pl.DataFrame()
+    if len(windows) == 1:
+        return build_labeled_window_dataset(
+            transactions=transactions,
+            article_department=article_department,
+            article_features=article_features,
+            customer_features=customer_features,
+            customer_age_bin=customer_age_bin,
+            ranker_config=ranker_config,
+            window=windows[0],
+            customer_cap=customer_cap,
+        )
+
+    per_window_cap = max(1000, customer_cap // len(windows))
+    frames: list[pl.DataFrame] = []
+    for idx, window in enumerate(windows, start=1):
+        print(
+            f"training window {idx}/{len(windows)}: "
+            f"history_end={window.history_end} labels={window.label_start}~{window.label_end} "
+            f"customer_cap={per_window_cap}"
+        )
+        frame = build_labeled_window_dataset(
+            transactions=transactions,
+            article_department=article_department,
+            article_features=article_features,
+            customer_features=customer_features,
+            customer_age_bin=customer_age_bin,
+            ranker_config=ranker_config,
+            window=window,
+            customer_cap=per_window_cap,
+        )
+        if not frame.is_empty():
+            frames.append(frame)
+
+    if not frames:
+        return pl.DataFrame()
+    return pl.concat(frames, how="vertical_relaxed")
+
+
 def run_single_window_validation(
     model: Any,
     transactions: pl.DataFrame,
     article_department: pl.DataFrame,
     article_features: pl.DataFrame,
+    customer_features: pl.DataFrame,
     customer_age_bin: dict[str, str],
     ranker_config: RankerConfig,
     window: WindowSpec,
@@ -839,6 +1236,7 @@ def run_single_window_validation(
     recall_context = build_recall_context(
         history_tx=history_tx,
         article_features=article_features,
+        customer_features=customer_features,
         reference_date=window.history_end,
     )
     candidates = build_candidate_frame(
@@ -899,6 +1297,23 @@ def build_train_and_validation_windows(transactions: pl.DataFrame) -> tuple[Wind
     )
 
 
+def build_rolling_training_windows(
+    transactions: pl.DataFrame,
+    latest_label_end: date,
+    window_count: int = TRAIN_WINDOW_COUNT,
+) -> list[WindowSpec]:
+    min_date = transactions.get_column("t_dat").min()
+    windows: list[WindowSpec] = []
+    for offset in range(max(1, window_count)):
+        label_end = latest_label_end - timedelta(days=LABEL_WINDOW_DAYS * offset)
+        label_start = label_end - timedelta(days=LABEL_WINDOW_DAYS - 1)
+        history_end = label_start - timedelta(days=1)
+        if history_end <= min_date:
+            continue
+        windows.append(WindowSpec(history_end=history_end, label_start=label_start, label_end=label_end))
+    return list(reversed(windows))
+
+
 def build_final_training_window(transactions: pl.DataFrame) -> WindowSpec:
     max_date = transactions.get_column("t_dat").max()
     label_end = max_date
@@ -931,6 +1346,7 @@ def generate_lgbm_submission(
     transactions: pl.DataFrame,
     article_department: pl.DataFrame,
     article_features: pl.DataFrame,
+    customer_features: pl.DataFrame,
     customer_age_bin: dict[str, str],
     ranker_config: RankerConfig,
     output_dir: Path = OUTPUT_DIR,
@@ -951,6 +1367,7 @@ def generate_lgbm_submission(
     recall_context = build_recall_context(
         history_tx=transactions,
         article_features=article_features,
+        customer_features=customer_features,
         reference_date=reference_date,
     )
 
@@ -1016,6 +1433,10 @@ def run_lgbm_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
         f"attribute_top={ATTRIBUTE_RECALL_TOP}, recent_global_top={RECENT_GLOBAL_RECALL_TOP}, "
         f"n_estimators={LGBM_N_ESTIMATORS}, "
         f"colour_recall={ENABLE_COLOUR_RECALL}, section_recall={ENABLE_SECTION_RECALL}, "
+        f"cooccurrence_recall={ENABLE_COOCCURRENCE_RECALL}, cooccurrence_top={COOCCURRENCE_RECALL_TOP}, "
+        f"cold_start_recall={ENABLE_COLD_START_RECALL}, cold_start_top={COLD_START_RECALL_TOP}, "
+        f"cold_history_max={COLD_START_HISTORY_MAX_ITEMS}, postal_cold={ENABLE_POSTAL_COLD_START_RECALL}, "
+        f"train_window_count={TRAIN_WINDOW_COUNT}, "
         f"drop_noisy_features={DROP_NOISY_FEATURES}, feature_experiment={FEATURE_EXPERIMENT}"
     )
     print(f"model feature count: {len(MODEL_FEATURE_COLUMNS)} / raw feature count: {len(FEATURE_COLUMNS)}")
@@ -1024,18 +1445,25 @@ def run_lgbm_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
     transactions = prepare_transactions(tables["transactions"])
     article_department = prepare_article_department(tables["articles"])
     article_features = prepare_article_model_features(tables["articles"])
+    customer_features = prepare_customer_model_features(tables["customers"])
     customer_age_bin = prepare_customer_age_bin(tables["customers"])
     ranker_config = load_ranker_from_cache(output_dir=prepare_output_dir(OUTPUT_DIR), fallback=DEFAULT_RANKER)
     print(f"candidate ranker: {describe_ranker(ranker_config)}")
 
     train_window, validation_window = build_train_and_validation_windows(transactions)
-    validation_train_df = build_labeled_window_dataset(
+    validation_train_windows = build_rolling_training_windows(
+        transactions,
+        latest_label_end=train_window.label_end,
+        window_count=TRAIN_WINDOW_COUNT,
+    )
+    validation_train_df = build_labeled_windows_dataset(
         transactions=transactions,
         article_department=article_department,
         article_features=article_features,
+        customer_features=customer_features,
         customer_age_bin=customer_age_bin,
         ranker_config=ranker_config,
-        window=train_window,
+        windows=validation_train_windows,
         customer_cap=TRAIN_CUSTOMER_CAP,
     )
     validation_model = train_lgbm_model(validation_train_df)
@@ -1044,6 +1472,7 @@ def run_lgbm_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
         transactions=transactions,
         article_department=article_department,
         article_features=article_features,
+        customer_features=customer_features,
         customer_age_bin=customer_age_bin,
         ranker_config=ranker_config,
         window=validation_window,
@@ -1054,13 +1483,19 @@ def run_lgbm_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
     print(f"LGBM validation metrics saved: {validation_path}")
 
     final_window = build_final_training_window(transactions)
-    final_train_df = build_labeled_window_dataset(
+    final_train_windows = build_rolling_training_windows(
+        transactions,
+        latest_label_end=final_window.label_end,
+        window_count=TRAIN_WINDOW_COUNT,
+    )
+    final_train_df = build_labeled_windows_dataset(
         transactions=transactions,
         article_department=article_department,
         article_features=article_features,
+        customer_features=customer_features,
         customer_age_bin=customer_age_bin,
         ranker_config=ranker_config,
-        window=final_window,
+        windows=final_train_windows,
         customer_cap=TRAIN_CUSTOMER_CAP,
     )
     final_model = train_lgbm_model(final_train_df)
@@ -1071,6 +1506,7 @@ def run_lgbm_pipeline(base_path: Path = BASE_PATH) -> dict[str, Any]:
         transactions=transactions,
         article_department=article_department,
         article_features=article_features,
+        customer_features=customer_features,
         customer_age_bin=customer_age_bin,
         ranker_config=ranker_config,
         output_dir=OUTPUT_DIR,

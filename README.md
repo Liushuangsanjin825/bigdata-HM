@@ -140,6 +140,62 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 %env LGBM_DROP_NOISY_FEATURES=0
 ```
 
+当前结构化优化版默认增加了轻量商品共现召回，并默认使用 `LGBM_FEATURE_EXPERIMENT=best`，即保留两个商品热度比例特征、去掉消融为负的 `price_diff_user_item`。Kaggle 上建议先跑下面这组，不使用图片特征，也不需要 GPU：
+
+```python
+%env LGBM_TRAIN_CUSTOMER_CAP=80000
+%env LGBM_VALIDATION_CUSTOMER_CAP=60000
+%env LGBM_MAX_CANDIDATES_PER_CUSTOMER=100
+%env LGBM_BASELINE_RECALL_TOP=80
+%env LGBM_ATTRIBUTE_RECALL_TOP=8
+%env LGBM_RECENT_GLOBAL_RECALL_TOP=12
+%env LGBM_ENABLE_COLOUR_RECALL=0
+%env LGBM_ENABLE_SECTION_RECALL=0
+%env LGBM_ENABLE_COOCCURRENCE_RECALL=1
+%env LGBM_COOCCURRENCE_RECALL_TOP=12
+%env LGBM_TRAIN_WINDOW_COUNT=1
+%env LGBM_FEATURE_EXPERIMENT=best
+%env LGBM_DROP_NOISY_FEATURES=0
+%env LGBM_N_ESTIMATORS=450
+%env LGBM_SUBMISSION_CUSTOMER_CHUNK=10000
+
+!python Final_Project_LGBM.py
+!cp outputs/submission.csv /kaggle/working/submission.csv
+```
+
+若单窗口版本验证分数提升且内存稳定，可尝试更稳但更慢的双窗口训练。双窗口会把 `LGBM_TRAIN_CUSTOMER_CAP` 自动分摊到两个窗口，避免训练集直接翻倍：
+
+```python
+%env LGBM_TRAIN_WINDOW_COUNT=2
+```
+
+150 候选原版基础上做冷启动增强时，建议使用下面这组。它会给无历史/弱历史用户追加年龄段、会员状态、新闻订阅频率组合下的近期热门商品；邮编召回默认关闭，避免高基数带来过拟合和内存压力：
+
+```python
+%env LGBM_TRAIN_CUSTOMER_CAP=80000
+%env LGBM_VALIDATION_CUSTOMER_CAP=60000
+%env LGBM_MAX_CANDIDATES_PER_CUSTOMER=150
+%env LGBM_BASELINE_RECALL_TOP=100
+%env LGBM_ATTRIBUTE_RECALL_TOP=8
+%env LGBM_RECENT_GLOBAL_RECALL_TOP=12
+%env LGBM_ENABLE_COLOUR_RECALL=0
+%env LGBM_ENABLE_SECTION_RECALL=0
+%env LGBM_ENABLE_COOCCURRENCE_RECALL=1
+%env LGBM_COOCCURRENCE_RECALL_TOP=20
+%env LGBM_ENABLE_COLD_START_RECALL=1
+%env LGBM_COLD_START_HISTORY_MAX_ITEMS=2
+%env LGBM_COLD_START_RECALL_TOP=18
+%env LGBM_ENABLE_POSTAL_COLD_START_RECALL=0
+%env LGBM_TRAIN_WINDOW_COUNT=1
+%env LGBM_FEATURE_EXPERIMENT=best
+%env LGBM_DROP_NOISY_FEATURES=0
+%env LGBM_N_ESTIMATORS=450
+%env LGBM_SUBMISSION_CUSTOMER_CHUNK=6000
+
+!python Final_Project_LGBM.py
+!cp outputs/submission.csv /kaggle/working/submission.csv
+```
+
 若验证发现 `candidate_rank/user_avg_price/user_recency_days` 仍有负贡献，可对比去噪版本：
 
 ```python

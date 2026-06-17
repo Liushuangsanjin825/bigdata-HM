@@ -11,7 +11,6 @@
   - `LGBM_Optuna_Tuning.py` 与 `LGBM_MultiFold_Eval.py` 分别负责自动调参和多折时间验证
   - `experiments/` 统一管理每次调参与 Kaggle 成绩记录
 - Kaggle 冲分阶段已完成多轮提交验证，当前最佳线上成绩为 Private `0.02881` / Public `0.02875`。
-- 答辩与个人简历材料已形成项目历程报告，可用于后续归档、答辩复盘和保研简历包装。
 
 ## 1. 任务书评分结构对齐
 

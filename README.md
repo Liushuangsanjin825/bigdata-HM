@@ -3,12 +3,15 @@
 《大数据分析与计算》综合实战项目仓库（H&M 推荐赛题）。
 
 本仓库当前阶段定位：
-- 已完成并提交任务书中的第一阶段（期中考核，20%）
-- 第二阶段已推进到“可持续调参 + 可追踪实验”阶段，并完成“生成层/评估层”职责拆分：
+- 已完成并提交任务书中的第一阶段（期中考核，20%），包括 EDA、数据清洗规则和业务洞察。
+- 第二阶段已推进到“端到端推荐系统 + 可追踪实验”阶段，并完成“生成层/评估层/增强模型层”职责拆分：
   - `Final_Project.py` 负责生成提交文件 `outputs/submission.csv`
   - `Final_Project_Eval.py` 负责离线评估与调参
+  - `Final_Project_LGBM.py` 负责 LightGBM 召回-排序增强流水线
+  - `LGBM_Optuna_Tuning.py` 与 `LGBM_MultiFold_Eval.py` 分别负责自动调参和多折时间验证
   - `experiments/` 统一管理每次调参与 Kaggle 成绩记录
-- 第三阶段（答辩与贡献，15%）尚未在本仓库完成
+- Kaggle 冲分阶段已完成多轮提交验证，当前最佳线上成绩为 Private `0.02881` / Public `0.02875`。
+- 答辩与个人简历材料已形成项目历程报告，可用于后续归档、答辩复盘和保研简历包装。
 
 ## 1. 任务书评分结构对齐
 
@@ -18,8 +21,7 @@
 3. Kaggle 打榜（15%）：MAP@12 竞赛结果与证明材料
 4. 答辩与贡献度（15%）：GitHub 提交记录与答辩表现
 
-当前仓库仅完整覆盖第 1 项（期中考核）。
-当前第 2 项已完成“多路融合推荐器 + 可持续调参与实验追踪”工程实现（可运行脚本、离线 MAP@12 评估、提交文件生成与格式校验），并完成生成层与评估层解耦。
+当前仓库已覆盖第 1 项、第 2 项和 Kaggle 打榜核心材料。项目已从早期规则 Baseline 推进到“多源候选召回 + LightGBM Classifier/Ranker 重排 + 时间验证 + 消融解释 + 线上提交验证”的完整推荐系统流程。
 
 ## 2. H&M 赛题关键规则（官方信息提炼）
 
@@ -62,10 +64,13 @@
 - `Final_Project.py`：第二阶段生成层脚本，仅负责输出 `outputs/submission.csv`
 - `Final_Project_Eval.py`：第二阶段评估层脚本，负责离线评估与权重调参
 - `Final_Project_LGBM.py`：增强版 LightGBM 排序/分类流水线，负责扩展候选、构造训练集、离线 MAP@12 验证并生成 `outputs/submission.csv`
+- `LGBM_Optuna_Tuning.py`：LightGBM/召回参数的 Optuna 自动调参入口，输出 `outputs/optuna_trials.csv` 与 `outputs/optuna_best_params.json`
+- `LGBM_MultiFold_Eval.py`：多折时间窗口验证入口，用于检查本地分数稳定性与线上泛化风险
 - `LGBM_Ablation_SHAP_Analysis.ipynb`：LightGBM baseline 的 Top-5 特征消融实验与 SHAP 可解释性分析 notebook
 - `LGBM_Ablation_SHAP_Analysis.py`：同上分析的脚本版入口，适合在 Kaggle 直接运行并查看日志
 - `homework/HM_LGBM_Ablation_SHAP_Report.md`：消融与 SHAP 分析报告（Markdown 版）
 - `homework/HM_LGBM_Ablation_SHAP_Report.pdf`：消融与 SHAP 分析报告（PDF 版）
+- `homework/HM_Project_Timeline_Report.md`：项目推进历程报告，记录从 EDA、Baseline 到 LGBM 优化、内存工程与融合提交的完整过程
 - `homework/` 下其余文件：已归档的消融表与 SHAP 图（`lgbm_ablation_top5.csv`、`lgbm_gain_importance.csv`、`shap_mean_abs_importance.csv`、`shap_beeswarm.png`、`shap_waterfall_sample0.png`）
 - `Final_Project.ipynb`：第二阶段展示型 notebook（已对齐“生成层/评估层”拆分）
 - `doc_images/`：期中阶段关键图表
@@ -140,9 +145,10 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 %env LGBM_DROP_NOISY_FEATURES=0
 ```
 
-当前结构化优化版默认增加了轻量商品共现召回，并默认使用 `LGBM_FEATURE_EXPERIMENT=best`，即保留两个商品热度比例特征、去掉消融为负的 `price_diff_user_item`。Kaggle 上建议先跑下面这组，不使用图片特征，也不需要 GPU：
+当前结构化优化版默认增加了轻量商品共现召回，并默认使用 `LGBM_FEATURE_EXPERIMENT=best`，即保留两个商品热度比例特征、去掉消融为负的 `price_diff_user_item`。`LGBM_ENABLE_ID_MAPPING=1` 默认开启，会把超长 `customer_id/article_id` 映射成 `Int32`，训练和候选 join 更省内存，最终提交前仍会还原为原始字符串 ID。Kaggle 上建议先跑下面这组，不使用图片特征，也不需要 GPU：
 
 ```python
+%env LGBM_ENABLE_ID_MAPPING=1
 %env LGBM_TRAIN_CUSTOMER_CAP=80000
 %env LGBM_VALIDATION_CUSTOMER_CAP=60000
 %env LGBM_MAX_CANDIDATES_PER_CUSTOMER=100
@@ -172,6 +178,7 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 150 候选原版基础上做冷启动增强时，建议使用下面这组。它会给无历史/弱历史用户追加年龄段、会员状态、新闻订阅频率组合下的近期热门商品；邮编召回默认关闭，避免高基数带来过拟合和内存压力：
 
 ```python
+%env LGBM_ENABLE_ID_MAPPING=1
 %env LGBM_TRAIN_CUSTOMER_CAP=80000
 %env LGBM_VALIDATION_CUSTOMER_CAP=60000
 %env LGBM_MAX_CANDIDATES_PER_CUSTOMER=150
@@ -195,6 +202,24 @@ os.environ["HNM_DATA_PATH"] = "/kaggle/input/h-and-m-personalized-fashion-recomm
 !python Final_Project_LGBM.py
 !cp outputs/submission.csv /kaggle/working/submission.csv
 ```
+
+若要用 Optuna 自动找更好的召回组合和 LightGBM 参数，建议先用较小 cap 做 10-30 次试跑，找到稳定方向后再把最优 `%env` 参数回填到 `Final_Project_LGBM.py` 的正式提交运行：
+
+```python
+!pip install -q optuna
+
+%env LGBM_ENABLE_ID_MAPPING=1
+%env OPTUNA_N_TRIALS=20
+%env OPTUNA_TRAIN_CUSTOMER_CAP=20000
+%env OPTUNA_VALIDATION_CUSTOMER_CAP=20000
+%env OPTUNA_TRAIN_WINDOW_COUNT=1
+
+!python LGBM_Optuna_Tuning.py
+```
+
+调参结果会写入：
+- `outputs/optuna_trials.csv`：每个 trial 的参数、MAP@12 和候选行数
+- `outputs/optuna_best_params.json`：最佳 MAP@12 与可直接复制到 Kaggle Notebook 的 `%env LGBM_...=...` 参数
 
 若验证发现 `candidate_rank/user_avg_price/user_recency_days` 仍有负贡献，可对比去噪版本：
 
@@ -272,14 +297,10 @@ LGBM_Ablation_SHAP_Analysis.ipynb
 ## 7. 阶段状态
 
 - [x] 第一阶段：期中 EDA 与清洗规则
-- 🔄 **第二阶段**：LightGBM 端到端流水线（进度 ~50%）
-  - [x] 生成层：`Final_Project.py` 基于规则融合生成 submission（Public 0.01841 / Private 0.01847）
-  - [x] 评估层：5 折离线 MAP@12 评估 + 规则权重调参（Mean 0.020833）
-  - [x] LightGBM 模型：`Final_Project_LGBM.py` 排序模型（Single Window MAP@12 0.030605，Public 0.02679 / Private 0.02717）
-  - [x] XAI 可解释性：特征消融 + SHAP 分析（Top-5 特征识别完成）
-  - 🔄 **进行中**：轻度 Optuna 超参优化（预期 +1~2%，20-25 trials）
-  - ⏳ 待优化：多模态特征集成（图片、文本等）
-- [ ] 第三阶段：Kaggle 公开榜证明与答辩材料
+- [x] 第二阶段：端到端推荐流水线、时间验证、LightGBM 排序模型、消融与 SHAP 分析
+- [x] Kaggle 打榜：已完成多轮 after-deadline 提交验证，当前最佳线上成绩 Private `0.02881` / Public `0.02875`
+- [x] 答辩与材料沉淀：已形成数据分析报告、答辩 PPT、消融解释报告和项目历程报告
+- [ ] 后续提升方向：更高质量 embedding 召回、多模态图文特征、跨窗口 OOF 融合与更大算力下的候选召回扩展
 
 ## 8. 调参实验管理
 
@@ -289,24 +310,22 @@ LGBM_Ablation_SHAP_Analysis.ipynb
 - `experiments/runs_index.csv`：离线实验总索引（run_id、参数、离线分数、提交哈希）。
 - `experiments/kaggle_scores.csv`：手动提交 Kaggle 后填写 Public/Private 分数。
 
-当前最佳离线记录（截至 2026-05-14）：
+当前阶段性最佳结果（截至 2026-06-17）：
 
-- `run_id`: `run_2026-04-27_001_hybrid_multisource`
-- `best_config`: `local_u40_l7_c5_d5_a5_t5.5_g1.2`（规则融合）
-- `offline_mean_map12`（规则）: `0.020833152816925597`
-- `lgbm_single_window_map12`: `0.030605012565942353`
-- 下一步优化方向：轻度 Optuna（20-25 trials，预期 +1~2%）或多模态特征
+- 最佳线上融合方案：`ranker_source_rank 0.535 + classifier_userattr90 0.465`
+- Kaggle Private：`0.02881`
+- Kaggle Public：`0.02875`
+- 早期规则 Baseline：Public `0.01828` / Private `0.01841`
+- 早期 LightGBM Baseline：Public 约 `0.02702` / Private 约 `0.02680`
+- 当前有效主线：多源召回、冷启动召回、用户画像特征、召回源排名特征、LightGBM Ranker/Classifier 与提交融合
 
-当前已登记官方成绩（截至 2026-05-14）：
+关键工程优化：
 
-- `run_id`: `run_2026-04-27_001_hybrid_multisource`
-- `latest_submission_variant`: `Final_Project_LGBM.py`（延续 task 第16条补充）
-- `public_score`: `0.02679`
-- `private_score`: `0.02717`
-- `submission status`: `after deadline`（late submission）
-- 下一阶段计划：轻度 Optuna 超参优化（计划提升 +1~2%，预计 Private score 到 0.028+）
-- `historical baseline score`: Public `0.01841` / Private `0.01847`
+- ID 映射：将长字符串 `customer_id/article_id` 映射为轻量整数，降低 join 与训练内存压力
+- 分块预测与流式提交：控制 Kaggle 30GB 内存环境下的峰值占用
+- 可配置召回与特征开关：通过 `%env LGBM_...` 管理候选数、召回源、特征实验、模型类型和训练窗口
+- 多折时间验证：使用 `LGBM_MultiFold_Eval.py` 检查单窗口本地分数与线上表现的偏差
 
 ## 9. 说明
 
-本仓库当前内容用于体现“已完成考核任务（期中）”的代码与材料，不代表最终全量大作业已经完成。
+本仓库当前内容已覆盖课程项目从数据分析、Baseline、增强模型到 Kaggle 提交验证的主要过程。当前最适合作为阶段性结论的结果是 Private `0.02881` / Public `0.02875`；若继续冲分，优先方向是更高质量候选召回、embedding/多模态特征和更严格的跨窗口 OOF 融合。

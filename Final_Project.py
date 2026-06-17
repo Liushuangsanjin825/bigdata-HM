@@ -435,11 +435,13 @@ def _build_age_top(
 ) -> dict[str, list[str]]:
     if not customer_age_bin:
         return {}
+    customer_id_dtype = train_tx.schema.get("customer_id", pl.Utf8)
     age_df = pl.DataFrame(
         {
             "customer_id": list(customer_age_bin.keys()),
             "age_bin": list(customer_age_bin.values()),
-        }
+        },
+        schema={"customer_id": customer_id_dtype, "age_bin": pl.Utf8},
     )
     cutoff = ref_date - timedelta(days=30)
     age_top = (

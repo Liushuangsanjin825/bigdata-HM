@@ -302,3 +302,20 @@
 4. 结果：
 	- 已完成语法校验：`python -m py_compile Final_Project_LGBM.py LGBM_Ablation_SHAP_Analysis.py`。
 	- 后续在 Kaggle 上依次运行 4 组实验，记录 `LGBM validation ... MAP@12=...`，即可生成报告中的消融表。
+
+## 21. 后期 Kaggle 冲分与项目进度同步（2026-06-17）
+
+1. 目标：将 5 月中旬之后的 Kaggle 冲分、模型优化、工程优化和个人简历材料沉淀同步回项目文件，避免仓库文档停留在早期答辩版本。
+2. 输入：早期数据分析报告、答辩 PPT、`Final_Project_LGBM.py` 后续功能、`LGBM_Optuna_Tuning.py`、`LGBM_MultiFold_Eval.py`、Kaggle 多轮提交记录与用户对话中的实验结果。
+3. 动作：
+	- 梳理项目从 EDA、规则 Baseline、时间窗口验证、LightGBM 二分类排序，到多源候选召回、冷启动召回、用户画像特征、召回源排名特征和 Ranker/Classifier 融合的完整推进路径。
+	- 将当前阶段性最佳线上结果同步到 `README.md`：Private `0.02881` / Public `0.02875`。
+	- 总结后期有效优化方向：用户属性偏好特征、召回源排名特征、LightGBM Ranker/Classifier 双模型互补、提交融合。
+	- 总结后期未稳定转化为线上收益的方向：盲目扩大属性召回、过强分群候选、部分价格带和扩展用户画像特征。
+	- 记录 Kaggle 30GB 内存约束下的工程优化：ID 映射、分块预测、流式提交、跳过无关输出、LightGBM 内存参数和环境变量开关。
+	- 新增 `homework/HM_Project_Timeline_Report.md`，作为项目历程报告，用于答辩复盘、保研简历包装和后续交接。
+4. 结果：
+	- `README.md` 已从早期阶段说明更新为当前阶段性结论。
+	- `task.md` 已追加后期进度记录。
+	- 新增项目历程报告：`homework/HM_Project_Timeline_Report.md`。
+	- 当前项目可概括为：基于 3178 万交易、137 万用户、10.5 万商品的两阶段推荐系统，采用“多源召回 + LightGBM 重排 + 时间验证 + 工程内存优化 + 模型融合”完成 Kaggle 全量用户 Top12 推荐。
